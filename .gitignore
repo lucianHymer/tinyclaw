@@ -6,16 +6,15 @@ dist/
 
 # TinyClaw runtime files
 .tinyclaw/logs/
-.tinyclaw/channels
-.tinyclaw/whatsapp-session/
 .tinyclaw/queue/
-.tinyclaw/reset_flag
+.tinyclaw/threads.json
+.tinyclaw/message-history.jsonl
+.tinyclaw/message-history.1.jsonl
+.tinyclaw/message-models.json
+.tinyclaw/routing-log.jsonl
 .tinyclaw/settings.json
-.wwebjs_cache
+.tinyclaw/heartbeat-state.json
 *.log
-
-# Environment variables
-.env
 
 # OS files
 .DS_Store

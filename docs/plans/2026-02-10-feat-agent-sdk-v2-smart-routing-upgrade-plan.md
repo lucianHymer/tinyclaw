@@ -949,95 +949,95 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 ## Acceptance Criteria
 
 ### Core (SDK + Sessions)
-- [ ] Queue processor uses Agent SDK v2 (`createSession` / `resumeSession`) instead of `execSync`
-- [ ] One session per Telegram topic, persisted in `threads.json`
-- [ ] Session resume failure gracefully falls back to new session creation
-- [ ] Model switching via close + resume preserves conversation history
-- [ ] `canUseTool` callback denies `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`
-- [ ] Concurrency guard prevents overlapping async message processing
-- [ ] `session.close()` called in all code paths (try/finally)
+- [x] Queue processor uses Agent SDK v2 (`createSession` / `resumeSession`) instead of `execSync`
+- [x] One session per Telegram topic, persisted in `threads.json`
+- [x] Session resume failure gracefully falls back to new session creation
+- [x] Model switching via close + resume preserves conversation history
+- [x] `canUseTool` callback denies `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`
+- [x] Concurrency guard prevents overlapping async message processing
+- [x] `session.close()` called in all code paths (try/finally)
 
 ### Message History
-- [ ] All messages (in/out, all threads) appended to `.tinyclaw/message-history.jsonl`
+- [x] All messages (in/out, all threads) appended to `.tinyclaw/message-history.jsonl`
 - [ ] `UserPromptSubmit` hook injects same-thread history for workers, all-thread history for master
-- [ ] System prompt includes compaction recovery instructions
-- [ ] Agent can search older history via Grep/Bash on the JSONL file
+- [x] System prompt includes compaction recovery instructions
+- [x] Agent can search older history via Grep/Bash on the JSONL file
 
 ### Routing
-- [ ] Router scores incoming messages using 14-dimension weighted classifier
-- [ ] Router input enriched with last 5 same-thread messages
-- [ ] Reply to bot message = upgrade-only (`maxTier`)
-- [ ] Fresh message = free pick (can downgrade)
-- [ ] Model switch triggers close + resume with new model
-- [ ] Routing decisions logged to `.tinyclaw/routing-log.jsonl`
-- [ ] Heartbeat messages bypass router, always use haiku
+- [x] Router scores incoming messages using 14-dimension weighted classifier
+- [x] Router input enriched with last 5 same-thread messages
+- [x] Reply to bot message = upgrade-only (`maxTier`)
+- [x] Fresh message = free pick (can downgrade)
+- [x] Model switch triggers close + resume with new model
+- [x] Routing decisions logged to `.tinyclaw/routing-log.jsonl`
+- [x] Heartbeat messages bypass router, always use haiku
 
 ### Per-Thread Heartbeats
-- [ ] `heartbeat-cron.sh` iterates all active threads in `threads.json`
-- [ ] Each thread gets its own heartbeat message with its `threadId`
-- [ ] Heartbeat prompt: "Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK."
-- [ ] Agent can read and edit `HEARTBEAT.md` in its `cwd` as a living task list
-- [ ] `HEARTBEAT_OK` responses optionally suppressed from Telegram (no clutter)
-- [ ] Heartbeat interval configurable in settings
+- [x] `heartbeat-cron.sh` iterates all active threads in `threads.json`
+- [x] Each thread gets its own heartbeat message with its `threadId`
+- [x] Heartbeat prompt: "Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK."
+- [x] Agent can read and edit `HEARTBEAT.md` in its `cwd` as a living task list
+- [x] `HEARTBEAT_OK` responses optionally suppressed from Telegram (no clutter)
+- [x] Heartbeat interval configurable in settings
 
 ### Time Awareness
-- [ ] Timezone configured in `.tinyclaw/settings.json`
-- [ ] `UserPromptSubmit` hook injects current local time before every message
-- [ ] Format: `[Monday, Feb 10, 2026, 3:42 PM MST]`
+- [x] Timezone configured in `.tinyclaw/settings.json`
+- [x] `UserPromptSubmit` hook injects current local time before every message
+- [x] Format: `[Monday, Feb 10, 2026, 3:42 PM MST]`
 
 ### Message Source Typing
-- [ ] All queue messages carry a `source` field: `"user"`, `"cross-thread"`, `"heartbeat"`, `"cli"`, `"system"`
-- [ ] Queue processor processes all sources without filtering
-- [ ] Source-aware prompt formatting (different prefixes per source type)
-- [ ] Cross-thread messages written directly to incoming queue (queue-to-queue canonical path)
-- [ ] Telegram post of cross-thread messages is optional visibility only
+- [x] All queue messages carry a `source` field: `"user"`, `"cross-thread"`, `"heartbeat"`, `"cli"`, `"system"`
+- [x] Queue processor processes all sources without filtering
+- [x] Source-aware prompt formatting (different prefixes per source type)
+- [x] Cross-thread messages written directly to incoming queue (queue-to-queue canonical path)
+- [x] Telegram post of cross-thread messages is optional visibility only
 
 ### Telegram
-- [ ] Bot receives all messages from forum group topics
-- [ ] Messages tagged with `threadId` (from `message_thread_id`)
-- [ ] `autoChatAction` plugin keeps typing indicator active
-- [ ] `autoRetry` plugin handles 429 rate limits
-- [ ] Message splitting at 4,096-char Telegram limit (paragraph-aware)
-- [ ] `/reset` resets session for the current topic
-- [ ] `/setdir` configures working directory for a topic
-- [ ] `/status` shows active threads with models and last activity
-- [ ] Cross-thread messages (with `targetThreadId`) posted to correct topic
-- [ ] Bot restricted to configured group chat ID
-- [ ] `bot.catch()` error handler installed
+- [x] Bot receives all messages from forum group topics
+- [x] Messages tagged with `threadId` (from `message_thread_id`)
+- [x] `autoChatAction` plugin keeps typing indicator active
+- [x] `autoRetry` plugin handles 429 rate limits
+- [x] Message splitting at 4,096-char Telegram limit (paragraph-aware)
+- [x] `/reset` resets session for the current topic
+- [x] `/setdir` configures working directory for a topic
+- [x] `/status` shows active threads with models and last activity
+- [x] Cross-thread messages (with `targetThreadId`) posted to correct topic
+- [x] Bot restricted to configured group chat ID
+- [x] `bot.catch()` error handler installed
 
 ### Cross-Thread Communication
-- [ ] Worker system prompts include cross-thread instructions (read threads.json, grep history, write outgoing with targetThreadId)
-- [ ] Master system prompt includes coordination role and all-thread visibility
-- [ ] Telegram client routes outgoing messages with `targetThreadId` to correct topic
-- [ ] threads.json readable by all sessions
+- [x] Worker system prompts include cross-thread instructions (read threads.json, grep history, write outgoing with targetThreadId)
+- [x] Master system prompt includes coordination role and all-thread visibility
+- [x] Telegram client routes outgoing messages with `targetThreadId` to correct topic
+- [x] threads.json readable by all sessions
 
 ### Cleanup
-- [ ] WhatsApp client fully removed (code, deps, shell scripts, docs)
-- [ ] Discord client fully removed (code, deps, shell scripts, docs)
-- [ ] `package.json` updated (old deps removed, new deps added)
-- [ ] `tinyclaw.sh` rewritten for Telegram-only (3 panes: telegram + queue + logs)
-- [ ] `setup-wizard.sh` updated for Telegram config
-- [ ] CLAUDE.md created with agent system instructions
-- [ ] Queue polling upgraded to `fs.watch` + 5-second fallback
-- [ ] tsconfig updated to `nodenext`
+- [x] WhatsApp client fully removed (code, deps, shell scripts, docs)
+- [x] Discord client fully removed (code, deps, shell scripts, docs)
+- [x] `package.json` updated (old deps removed, new deps added)
+- [x] `tinyclaw.sh` rewritten for Telegram-only (3 panes: telegram + queue + logs)
+- [x] `setup-wizard.sh` updated for Telegram config
+- [x] CLAUDE.md created with agent system instructions
+- [x] Queue polling upgraded to `fs.watch` + 5-second fallback
+- [x] tsconfig updated to `nodenext`
 
 ## Implementation Order
 
-1. **Remove WhatsApp + Discord** (all files, atomic commit)
-2. **Update tsconfig** to `nodenext` + ES2022
-3. **Add dependencies** (`@anthropic-ai/claude-agent-sdk`, `grammy`, `@grammyjs/auto-chat-action`, `@grammyjs/auto-retry`, `zod`)
-4. **Add router files + routing logger** (copy 4 router files + logger from anthropic-router)
-5. **Add JSONL message history module** (`src/message-history.ts` -- append, read, rotate, source-typed entries)
-6. **Add session manager** (`src/session-manager.ts` -- threads.json with atomic writes, create/resume/close/model-switch, graceful shutdown)
-7. **Rewrite queue-processor.ts** (SDK integration, routing, history injection, time injection, source-aware formatting, concurrency guard, fs.watch, retry with max 3 attempts)
-8. **Add Telegram client** (`src/telegram-client.ts` -- grammY, forum topics, commands, outgoing polling, cross-thread queue-to-queue routing, bot-self-message filter)
-9. **Create CLAUDE.md** with agent system instructions
-10. **Create per-project HEARTBEAT.md** templates (workspace-level + example per-repo)
-11. **Update heartbeat-cron.sh** (iterate threads.json, per-thread heartbeats, generic prompt)
-12. **Update tinyclaw.sh** (3 panes: telegram + queue + logs)
-13. **Update setup-wizard.sh** (Telegram bot token + group chat ID + timezone)
-14. **Add routing decision logger** (`src/routing-logger.ts`)
-15. **Test end-to-end** via Telegram forum topic (user messages, cross-thread, heartbeats, model switching)
+- [x] 1. **Remove WhatsApp + Discord** (all files, atomic commit)
+- [x] 2. **Update tsconfig** to `nodenext` + ES2022
+- [x] 3. **Add dependencies** (`@anthropic-ai/claude-agent-sdk`, `grammy`, `@grammyjs/auto-chat-action`, `@grammyjs/auto-retry`, `zod`)
+- [x] 4. **Add router files + routing logger** (copy 4 router files + logger from anthropic-router)
+- [x] 5. **Add JSONL message history module** (`src/message-history.ts` -- append, read, rotate, source-typed entries)
+- [x] 6. **Add session manager** (`src/session-manager.ts` -- threads.json with atomic writes, create/resume/close/model-switch, graceful shutdown)
+- [x] 7. **Rewrite queue-processor.ts** (SDK integration, routing, history injection, time injection, source-aware formatting, concurrency guard, fs.watch, retry with max 3 attempts)
+- [x] 8. **Add Telegram client** (`src/telegram-client.ts` -- grammY, forum topics, commands, outgoing polling, cross-thread queue-to-queue routing, bot-self-message filter)
+- [x] 9. **Create CLAUDE.md** with agent system instructions
+- [ ] 10. **Create per-project HEARTBEAT.md** templates (workspace-level + example per-repo)
+- [x] 11. **Update heartbeat-cron.sh** (iterate threads.json, per-thread heartbeats, generic prompt)
+- [x] 12. **Update tinyclaw.sh** (3 panes: telegram + queue + logs)
+- [x] 13. **Update setup-wizard.sh** (Telegram bot token + group chat ID + timezone)
+- [x] 14. **Add routing decision logger** (`src/routing-logger.ts`)
+- [ ] 15. **Test end-to-end** via Telegram forum topic (user messages, cross-thread, heartbeats, model switching)
 
 ## Dependencies & Risks
 

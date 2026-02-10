@@ -1,5 +1,5 @@
 #!/bin/bash
-# TinyClaw Setup Wizard
+# TinyClaw Setup Wizard - Telegram Forum Configuration
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETTINGS_FILE="$SCRIPT_DIR/.tinyclaw/settings.json"
@@ -13,70 +13,49 @@ NC='\033[0m'
 mkdir -p "$SCRIPT_DIR/.tinyclaw"
 
 echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  TinyClaw - Setup Wizard${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}------------------------------------------------------${NC}"
+echo -e "${GREEN}  TinyClaw - Telegram Forum Setup Wizard${NC}"
+echo -e "${BLUE}------------------------------------------------------${NC}"
 echo ""
 
-# Channel selection
-echo "Which messaging channel do you want to use?"
+# Telegram bot token
+echo "Enter your Telegram bot token:"
+echo -e "${YELLOW}(Get one from @BotFather on Telegram)${NC}"
 echo ""
-echo "  1) Discord"
-echo "  2) WhatsApp"
-echo "  3) Both"
-echo ""
-read -rp "Choose [1-3]: " CHANNEL_CHOICE
+read -rp "Token: " TELEGRAM_BOT_TOKEN
 
-case "$CHANNEL_CHOICE" in
-    1) CHANNEL="discord" ;;
-    2) CHANNEL="whatsapp" ;;
-    3) CHANNEL="both" ;;
-    *)
-        echo -e "${RED}Invalid choice${NC}"
-        exit 1
-        ;;
-esac
-echo -e "${GREEN}✓ Channel: $CHANNEL${NC}"
-echo ""
-
-# Discord bot token (if needed)
-DISCORD_TOKEN=""
-if [[ "$CHANNEL" == "discord" ]] || [[ "$CHANNEL" == "both" ]]; then
-    echo "Enter your Discord bot token:"
-    echo -e "${YELLOW}(Get one at: https://discord.com/developers/applications)${NC}"
-    echo ""
-    read -rp "Token: " DISCORD_TOKEN
-
-    if [ -z "$DISCORD_TOKEN" ]; then
-        echo -e "${RED}Discord bot token is required${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}✓ Discord token saved${NC}"
-    echo ""
+if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+    echo -e "${RED}Telegram bot token is required${NC}"
+    exit 1
 fi
-
-# Model selection
-echo "Which Claude model?"
+echo -e "${GREEN}Telegram bot token saved${NC}"
 echo ""
-echo "  1) Sonnet  (fast, recommended)"
-echo "  2) Opus    (smartest)"
-echo ""
-read -rp "Choose [1-2]: " MODEL_CHOICE
 
-case "$MODEL_CHOICE" in
-    1) MODEL="sonnet" ;;
-    2) MODEL="opus" ;;
-    *)
-        echo -e "${RED}Invalid choice${NC}"
-        exit 1
-        ;;
-esac
-echo -e "${GREEN}✓ Model: $MODEL${NC}"
+# Telegram group chat ID
+echo "Enter your Telegram group chat ID:"
+echo -e "${YELLOW}(The numeric ID of your Telegram group/forum)${NC}"
+echo ""
+read -rp "Chat ID: " TELEGRAM_CHAT_ID
+
+if [ -z "$TELEGRAM_CHAT_ID" ]; then
+    echo -e "${RED}Telegram chat ID is required${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Telegram chat ID saved${NC}"
+echo ""
+
+# Timezone
+echo "Enter your timezone:"
+echo -e "${YELLOW}(e.g. America/Denver, America/New_York, UTC)${NC}"
+echo ""
+read -rp "Timezone [default: America/Denver]: " TIMEZONE_INPUT
+TIMEZONE=${TIMEZONE_INPUT:-America/Denver}
+echo -e "${GREEN}Timezone: $TIMEZONE${NC}"
 echo ""
 
 # Heartbeat interval
 echo "Heartbeat interval (seconds)?"
-echo -e "${YELLOW}(How often Claude checks in proactively)${NC}"
+echo -e "${YELLOW}(How often the heartbeat cron checks active threads)${NC}"
 echo ""
 read -rp "Interval [default: 500]: " HEARTBEAT_INPUT
 HEARTBEAT_INTERVAL=${HEARTBEAT_INPUT:-500}
@@ -86,20 +65,22 @@ if ! [[ "$HEARTBEAT_INTERVAL" =~ ^[0-9]+$ ]]; then
     echo -e "${RED}Invalid interval, using default 500${NC}"
     HEARTBEAT_INTERVAL=500
 fi
-echo -e "${GREEN}✓ Heartbeat interval: ${HEARTBEAT_INTERVAL}s${NC}"
+echo -e "${GREEN}Heartbeat interval: ${HEARTBEAT_INTERVAL}s${NC}"
 echo ""
 
 # Write settings.json
 cat > "$SETTINGS_FILE" <<EOF
 {
-  "channel": "$CHANNEL",
-  "model": "$MODEL",
-  "discord_bot_token": "$DISCORD_TOKEN",
-  "heartbeat_interval": $HEARTBEAT_INTERVAL
+  "telegram_bot_token": "$TELEGRAM_BOT_TOKEN",
+  "telegram_chat_id": "$TELEGRAM_CHAT_ID",
+  "timezone": "$TIMEZONE",
+  "heartbeat_interval": $HEARTBEAT_INTERVAL,
+  "max_concurrent_sessions": 10,
+  "session_idle_timeout_minutes": 30
 }
 EOF
 
-echo -e "${GREEN}✓ Configuration saved to .tinyclaw/settings.json${NC}"
+echo -e "${GREEN}Configuration saved to .tinyclaw/settings.json${NC}"
 echo ""
 echo "You can now start TinyClaw:"
 echo -e "  ${GREEN}./tinyclaw.sh start${NC}"
