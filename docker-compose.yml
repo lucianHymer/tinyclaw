@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  broker:
+    build: ./broker
+    restart: always
+    volumes:
+      - ./secrets/github-app.pem:/secrets/github-app.pem:ro
+    environment:
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  bot:
+    build: .
+    restart: always
+    entrypoint: /app/entrypoint.sh
+    depends_on:
+      - broker
+    volumes:
+      - tinyclaw-data:/app/.tinyclaw
+      - ${WORKSPACE_ROOT:-/home/clawcian/.openclaw/workspace}:/workspace
+      - ./secrets/github-installations.json:/secrets/github-installations.json:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - NODE_ENV=production
+      - DEFAULT_CWD=/workspace
+      - CREDENTIAL_BROKER_URL=http://broker:3000
+    networks:
+      - internal
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    restart: always
+    depends_on:
+      - bot
+    volumes:
+      - tinyclaw-data:/app/.tinyclaw:ro
+      - /proc:/host/proc:ro
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - dashboard
+    networks:
+      - internal
+
+volumes:
+  tinyclaw-data:
+
+networks:
+  internal:
+    driver: bridge

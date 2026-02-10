@@ -16,6 +16,10 @@ dist/
 .tinyclaw/heartbeat-state.json
 *.log
 
+# Docker / Secrets
+secrets/
+.env
+
 # OS files
 .DS_Store
 

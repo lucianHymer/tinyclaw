@@ -1,0 +1,1392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TinyClaw Dashboard</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-green: #3fb950;
+  --accent-blue: #58a6ff;
+  --accent-purple: #bc8cff;
+  --accent-red: #f85149;
+  --accent-yellow: #d29922;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+/* ─── Navbar ─── */
+
+#navbar {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+#navbar .brand {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--accent-blue);
+  margin-right: 16px;
+  white-space: nowrap;
+}
+
+#navbar a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+#navbar a:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+#navbar a.active { background: var(--bg-tertiary); color: var(--accent-blue); }
+
+#conn-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+#conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  transition: background 0.3s;
+}
+
+#conn-dot.disconnected { background: var(--accent-red); }
+#conn-dot.connecting { background: var(--accent-yellow); }
+
+/* ─── Main ─── */
+
+#main {
+  height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.view { display: none; }
+.view.active { display: block; }
+
+/* ─── Shared Components ─── */
+
+h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 12px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-weight: 600;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+tr:hover td { background: var(--bg-tertiary); }
+tr.clickable { cursor: pointer; }
+
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.badge-green { background: rgba(63,185,80,0.15); color: var(--accent-green); }
+.badge-blue { background: rgba(88,166,255,0.15); color: var(--accent-blue); }
+.badge-purple { background: rgba(188,140,255,0.15); color: var(--accent-purple); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--accent-red); }
+.badge-yellow { background: rgba(210,153,34,0.15); color: var(--accent-yellow); }
+
+.bar-container {
+  width: 100%;
+  height: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.bar-label {
+  position: absolute;
+  right: 6px;
+  top: 0;
+  line-height: 16px;
+  font-size: 10px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.stat-card .label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-card .value {
+  font-size: 22px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.stat-card .bar-container { margin-top: 6px; }
+
+/* ─── Feed / Logs ─── */
+
+.feed-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.feed-controls button, .feed-controls input, .tab-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.feed-controls button:hover, .tab-btn:hover { border-color: var(--text-secondary); }
+.feed-controls button.active, .tab-btn.active { border-color: var(--accent-blue); color: var(--accent-blue); }
+
+.feed-controls input {
+  flex: 1;
+  max-width: 300px;
+  cursor: text;
+}
+
+.feed-list {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.feed-item {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.feed-item:hover { background: var(--bg-tertiary); }
+.feed-item:last-child { border-bottom: none; }
+
+.feed-item .meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.feed-item .preview {
+  color: var(--text-primary);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feed-item .full-content {
+  display: none;
+  margin-top: 6px;
+  padding: 8px;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.feed-item.expanded .full-content { display: block; }
+.feed-item.expanded .preview { white-space: normal; }
+
+.model-haiku { color: var(--accent-green); }
+.model-sonnet { color: var(--accent-blue); }
+.model-opus { color: var(--accent-purple); }
+
+/* ─── Thread Detail Chat ─── */
+
+.thread-header {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.thread-header .field {
+  display: flex;
+  flex-direction: column;
+}
+
+.thread-header .field .label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.thread-header .field .val {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.chat-bubble {
+  max-width: 75%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.chat-bubble.in {
+  align-self: flex-start;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+
+.chat-bubble.out {
+  align-self: flex-end;
+  background: rgba(88,166,255,0.1);
+  border: 1px solid rgba(88,166,255,0.25);
+}
+
+.chat-bubble .bubble-meta {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-bubble .bubble-content {
+  white-space: pre-wrap;
+}
+
+/* ─── Routing Inspector ─── */
+
+.tier-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.tier-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.tier-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* ─── Prompt Inspector ─── */
+
+.prompt-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.prompt-header {
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.1s;
+  font-size: 12px;
+}
+
+.prompt-header:hover { background: var(--bg-tertiary); }
+
+.prompt-header .arrow {
+  color: var(--text-secondary);
+  transition: transform 0.2s;
+  font-size: 10px;
+}
+
+.prompt-card.expanded .prompt-header .arrow { transform: rotate(90deg); }
+
+.prompt-body {
+  display: none;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+}
+
+.prompt-card.expanded .prompt-body { display: block; }
+
+.prompt-length-bar {
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 60px;
+  max-width: 150px;
+}
+
+.prompt-length-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+/* ─── Log View ─── */
+
+.log-line {
+  padding: 2px 10px;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(48,54,61,0.5);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-line.error { color: var(--accent-red); }
+.log-line.warn { color: var(--accent-yellow); }
+.log-line.info { color: var(--text-secondary); }
+
+/* ─── Metrics Bars ─── */
+
+.metric-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.metric-label {
+  width: 80px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.metric-bar-wrap {
+  flex: 1;
+  height: 24px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.metric-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease, background 0.5s ease;
+}
+
+.metric-bar-text {
+  position: absolute;
+  right: 8px;
+  top: 0;
+  line-height: 24px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* ─── Empty state ─── */
+.empty-state {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 40px 20px;
+  font-size: 13px;
+}
+</style>
+</head>
+<body>
+
+<div id="navbar">
+  <span class="brand">TinyClaw Dashboard</span>
+  <a href="#overview" data-view="overview">Overview</a>
+  <a href="#feed" data-view="feed">Feed</a>
+  <a href="#routing" data-view="routing">Routing</a>
+  <a href="#prompts" data-view="prompts">Prompts</a>
+  <a href="#metrics" data-view="metrics">Metrics</a>
+  <a href="#logs" data-view="logs">Logs</a>
+  <div id="conn-status">
+    <div id="conn-dot" class="connecting"></div>
+    <span id="conn-text">connecting</span>
+  </div>
+</div>
+
+<div id="main">
+  <!-- View: Overview -->
+  <div id="view-overview" class="view">
+    <h2>System Overview</h2>
+    <div class="stat-grid" id="overview-stats"></div>
+    <h3>Queue Status</h3>
+    <div class="stat-grid" id="overview-queue"></div>
+    <h3>Active Threads</h3>
+    <table id="threads-table">
+      <thead>
+        <tr><th>ID</th><th>Name</th><th>Model</th><th>Last Active</th><th>CWD</th></tr>
+      </thead>
+      <tbody id="threads-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- View: Feed -->
+  <div id="view-feed" class="view">
+    <h2>Live Message Feed</h2>
+    <div class="feed-controls">
+      <button id="feed-pause-btn">Pause</button>
+      <button id="feed-clear-btn">Clear</button>
+      <span id="feed-count" style="color:var(--text-secondary);font-size:11px;">0 messages</span>
+    </div>
+    <div class="feed-list" id="feed-list"></div>
+  </div>
+
+  <!-- View: Thread Detail -->
+  <div id="view-thread" class="view">
+    <h2 id="thread-title">Thread Detail</h2>
+    <div class="thread-header" id="thread-header-info"></div>
+    <div class="chat-container" id="thread-chat"></div>
+  </div>
+
+  <!-- View: Routing -->
+  <div id="view-routing" class="view">
+    <h2>Routing Inspector</h2>
+    <div class="tier-summary" id="routing-summary"></div>
+    <table id="routing-table">
+      <thead>
+        <tr><th>Time</th><th>Tier</th><th>Model</th><th>Confidence</th><th>Tokens</th><th>Signals</th></tr>
+      </thead>
+      <tbody id="routing-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- View: Prompts -->
+  <div id="view-prompts" class="view">
+    <h2>Prompt Inspector</h2>
+    <div id="prompts-list"></div>
+  </div>
+
+  <!-- View: Metrics -->
+  <div id="view-metrics" class="view">
+    <h2>System Metrics</h2>
+    <div id="metrics-bars"></div>
+  </div>
+
+  <!-- View: Logs -->
+  <div id="view-logs" class="view">
+    <h2>System Logs</h2>
+    <div class="feed-controls">
+      <button class="tab-btn active" data-log="telegram">Telegram</button>
+      <button class="tab-btn" data-log="queue">Queue</button>
+      <input type="text" id="log-filter" placeholder="Filter logs...">
+      <button id="log-pause-btn">Pause</button>
+      <button id="log-clear-btn">Clear</button>
+    </div>
+    <div class="feed-list" id="log-list"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ─── State ───
+
+  const state = {
+    currentView: null,
+    initialized: {},
+    intervals: {},
+    eventSources: {},
+    feedPaused: false,
+    feedMessages: [],
+    logPaused: false,
+    logStream: 'telegram',
+    logMessages: [],
+    logFilter: '',
+    routingEntries: [],
+    connected: false,
+  };
+
+  // ─── Utilities ───
+
+  function relativeTime(ts) {
+    if (!ts) return 'never';
+    const diff = Date.now() - ts;
+    if (diff < 0) return 'just now';
+    if (diff < 5000) return 'just now';
+    if (diff < 60000) return Math.floor(diff / 1000) + 's ago';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    return Math.floor(diff / 86400000) + 'd ago';
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function truncate(str, len) {
+    if (!str) return '';
+    return str.length > len ? str.substring(0, len) + '...' : str;
+  }
+
+  function modelClass(model) {
+    if (!model) return '';
+    const m = model.toLowerCase();
+    if (m.includes('haiku')) return 'model-haiku';
+    if (m.includes('sonnet')) return 'model-sonnet';
+    if (m.includes('opus')) return 'model-opus';
+    return '';
+  }
+
+  function tierBadge(tier) {
+    if (!tier) return '';
+    const cls = tier === 'SIMPLE' ? 'badge-green' : tier === 'MEDIUM' ? 'badge-blue' : 'badge-purple';
+    return '<span class="badge ' + cls + '">' + escapeHtml(tier) + '</span>';
+  }
+
+  function modelBadge(model) {
+    if (!model) return '';
+    const m = model.toLowerCase();
+    let cls = 'badge-blue';
+    if (m.includes('haiku')) cls = 'badge-green';
+    else if (m.includes('opus')) cls = 'badge-purple';
+    return '<span class="badge ' + cls + '">' + escapeHtml(model) + '</span>';
+  }
+
+  function barColor(pct) {
+    if (pct < 60) return 'var(--accent-green)';
+    if (pct < 80) return 'var(--accent-yellow)';
+    return 'var(--accent-red)';
+  }
+
+  function makeBar(pct, label) {
+    const color = barColor(pct);
+    return '<div class="bar-container">' +
+      '<div class="bar-fill" style="width:' + Math.min(pct, 100) + '%;background:' + color + '"></div>' +
+      '<span class="bar-label">' + escapeHtml(label || (pct.toFixed(1) + '%')) + '</span>' +
+      '</div>';
+  }
+
+  function formatTimestamp(ts) {
+    const d = new Date(ts);
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
+    return h + ':' + m + ':' + s;
+  }
+
+  async function api(path) {
+    try {
+      const res = await fetch(path);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      setConnected(true);
+      return await res.json();
+    } catch (e) {
+      setConnected(false);
+      return null;
+    }
+  }
+
+  function setConnected(ok) {
+    const dot = document.getElementById('conn-dot');
+    const text = document.getElementById('conn-text');
+    if (ok) {
+      dot.className = '';
+      dot.id = 'conn-dot';
+      text.textContent = 'connected';
+      state.connected = true;
+    } else {
+      dot.className = 'disconnected';
+      dot.id = 'conn-dot';
+      text.textContent = 'disconnected';
+      state.connected = false;
+    }
+  }
+
+  function createSSE(url, onMessage) {
+    const es = new EventSource(url);
+    es.onopen = function() { setConnected(true); };
+    es.onerror = function() {
+      setConnected(false);
+      // EventSource auto-reconnects
+    };
+    es.onmessage = onMessage;
+    return es;
+  }
+
+  function closeSSE(key) {
+    if (state.eventSources[key]) {
+      state.eventSources[key].close();
+      delete state.eventSources[key];
+    }
+  }
+
+  function clearInterval_(key) {
+    if (state.intervals[key]) {
+      clearInterval(state.intervals[key]);
+      delete state.intervals[key];
+    }
+  }
+
+  // ─── Router ───
+
+  function getViewFromHash() {
+    const hash = location.hash.slice(1) || 'overview';
+    if (hash.startsWith('thread/')) return { view: 'thread', param: hash.split('/')[1] };
+    return { view: hash, param: null };
+  }
+
+  function navigate() {
+    const { view, param } = getViewFromHash();
+
+    // Deactivate previous view
+    if (state.currentView && state.currentView !== view && state.currentView !== 'thread') {
+      teardownView(state.currentView);
+    }
+    if (state.currentView === 'thread' && (view !== 'thread' || param !== state.currentParam)) {
+      teardownView('thread');
+    }
+
+    // Hide all views, show target
+    document.querySelectorAll('.view').forEach(function(el) { el.classList.remove('active'); });
+
+    let viewEl;
+    if (view === 'thread') {
+      viewEl = document.getElementById('view-thread');
+    } else {
+      viewEl = document.getElementById('view-' + view);
+    }
+
+    if (!viewEl) {
+      viewEl = document.getElementById('view-overview');
+      location.hash = '#overview';
+    }
+    viewEl.classList.add('active');
+
+    // Update nav active state
+    document.querySelectorAll('#navbar a').forEach(function(a) {
+      a.classList.remove('active');
+      if (view === 'thread') {
+        // no nav link for thread detail
+      } else if (a.dataset.view === view) {
+        a.classList.add('active');
+      }
+    });
+
+    state.currentView = view;
+    state.currentParam = param;
+
+    // Init view
+    initView(view, param);
+  }
+
+  function initView(view, param) {
+    switch (view) {
+      case 'overview': initOverview(); break;
+      case 'feed': initFeed(); break;
+      case 'thread': initThread(param); break;
+      case 'routing': initRouting(); break;
+      case 'prompts': initPrompts(); break;
+      case 'metrics': initMetrics(); break;
+      case 'logs': initLogs(); break;
+    }
+  }
+
+  function teardownView(view) {
+    switch (view) {
+      case 'overview':
+        clearInterval_('overview');
+        break;
+      case 'feed':
+        closeSSE('feed');
+        break;
+      case 'thread':
+        break;
+      case 'routing':
+        closeSSE('routing');
+        break;
+      case 'metrics':
+        clearInterval_('metrics');
+        break;
+      case 'logs':
+        closeSSE('logs');
+        break;
+    }
+  }
+
+  // ─── View 1: Overview ───
+
+  function initOverview() {
+    fetchOverview();
+    clearInterval_('overview');
+    state.intervals.overview = setInterval(fetchOverview, 5000);
+  }
+
+  async function fetchOverview() {
+    const data = await api('/api/status');
+    if (!data) {
+      renderOverviewEmpty();
+      return;
+    }
+    renderOverviewStats(data);
+    renderOverviewQueue(data);
+    renderOverviewThreads(data);
+  }
+
+  function renderOverviewStats(data) {
+    const sys = data.system || {};
+    const container = document.getElementById('overview-stats');
+    const cpu = sys.cpuPercent || 0;
+    const ramUsed = sys.ramUsedMB || 0;
+    const ramTotal = sys.ramTotalMB || 1;
+    const ramPct = (ramUsed / ramTotal * 100);
+    const diskUsed = sys.diskUsedGB || 0;
+    const diskTotal = sys.diskTotalGB || 1;
+    const diskPct = (diskUsed / diskTotal * 100);
+    const load = sys.loadAverage || [0, 0, 0];
+
+    container.innerHTML =
+      '<div class="stat-card">' +
+        '<div class="label">CPU</div>' +
+        '<div class="value" style="color:' + barColor(cpu) + '">' + cpu.toFixed(1) + '%</div>' +
+        makeBar(cpu) +
+      '</div>' +
+      '<div class="stat-card">' +
+        '<div class="label">RAM</div>' +
+        '<div class="value">' + ramUsed.toFixed(0) + ' / ' + ramTotal.toFixed(0) + ' MB</div>' +
+        makeBar(ramPct) +
+      '</div>' +
+      '<div class="stat-card">' +
+        '<div class="label">Disk</div>' +
+        '<div class="value">' + diskUsed.toFixed(1) + ' / ' + diskTotal.toFixed(1) + ' GB</div>' +
+        makeBar(diskPct) +
+      '</div>' +
+      '<div class="stat-card">' +
+        '<div class="label">Load Average</div>' +
+        '<div class="value">' + load.map(function(v) { return v.toFixed(2); }).join('  ') + '</div>' +
+      '</div>';
+  }
+
+  function renderOverviewQueue(data) {
+    const q = data.queue || {};
+    const container = document.getElementById('overview-queue');
+    const incoming = q.incoming || 0;
+    const processing = q.processing || 0;
+    const deadLetter = q.deadLetter || 0;
+
+    container.innerHTML =
+      '<div class="stat-card">' +
+        '<div class="label">Incoming</div>' +
+        '<div class="value" style="color:var(--accent-blue)">' + incoming + '</div>' +
+      '</div>' +
+      '<div class="stat-card">' +
+        '<div class="label">Processing</div>' +
+        '<div class="value" style="color:var(--accent-yellow)">' + processing + '</div>' +
+      '</div>' +
+      '<div class="stat-card">' +
+        '<div class="label">Dead Letter</div>' +
+        '<div class="value" style="color:' + (deadLetter > 0 ? 'var(--accent-red)' : 'var(--text-secondary)') + '">' + deadLetter + '</div>' +
+      '</div>';
+  }
+
+  function renderOverviewThreads(data) {
+    const threads = data.threads || {};
+    const tbody = document.getElementById('threads-tbody');
+    let rows = '';
+
+    const sortedIds = Object.keys(threads).sort(function(a, b) {
+      return (threads[b].lastActive || 0) - (threads[a].lastActive || 0);
+    });
+
+    if (sortedIds.length === 0) {
+      rows = '<tr><td colspan="5" class="empty-state">No active threads</td></tr>';
+    }
+
+    for (var i = 0; i < sortedIds.length; i++) {
+      var id = sortedIds[i];
+      var t = threads[id];
+      rows += '<tr class="clickable" data-thread-id="' + escapeHtml(id) + '">' +
+        '<td>' + escapeHtml(id) + '</td>' +
+        '<td>' + escapeHtml(t.name || '') + (t.isMaster ? ' <span class="badge badge-yellow">master</span>' : '') + '</td>' +
+        '<td>' + modelBadge(t.model) + '</td>' +
+        '<td>' + relativeTime(t.lastActive) + '</td>' +
+        '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(t.cwd || '') + '">' + escapeHtml(t.cwd || '') + '</td>' +
+        '</tr>';
+    }
+
+    tbody.innerHTML = rows;
+
+    // Click handlers for thread rows
+    tbody.querySelectorAll('tr.clickable').forEach(function(tr) {
+      tr.onclick = function() {
+        var tid = tr.dataset.threadId;
+        location.hash = '#thread/' + tid;
+      };
+    });
+  }
+
+  function renderOverviewEmpty() {
+    document.getElementById('overview-stats').innerHTML =
+      '<div class="stat-card"><div class="label">Status</div><div class="value" style="color:var(--accent-red)">Offline</div></div>';
+    document.getElementById('overview-queue').innerHTML = '';
+    document.getElementById('threads-tbody').innerHTML =
+      '<tr><td colspan="5" class="empty-state">Cannot reach API server</td></tr>';
+  }
+
+  // ─── View 2: Live Feed ───
+
+  function initFeed() {
+    state.feedPaused = false;
+    updateFeedPauseBtn();
+
+    document.getElementById('feed-pause-btn').onclick = function() {
+      state.feedPaused = !state.feedPaused;
+      updateFeedPauseBtn();
+    };
+
+    document.getElementById('feed-clear-btn').onclick = function() {
+      state.feedMessages = [];
+      renderFeedList();
+    };
+
+    closeSSE('feed');
+    state.eventSources.feed = createSSE('/api/messages/feed', function(evt) {
+      try {
+        var msg = JSON.parse(evt.data);
+        state.feedMessages.push(msg);
+        // Keep last 500
+        if (state.feedMessages.length > 500) state.feedMessages.shift();
+        if (!state.feedPaused) renderFeedList();
+      } catch(e) {}
+    });
+
+    // Also fetch recent messages
+    fetchRecentFeed();
+  }
+
+  async function fetchRecentFeed() {
+    var data = await api('/api/messages/recent?n=50');
+    if (data && Array.isArray(data)) {
+      state.feedMessages = data.concat(state.feedMessages);
+      // Deduplicate by messageId if available
+      var seen = {};
+      state.feedMessages = state.feedMessages.filter(function(m) {
+        var key = m.messageId || (m.ts + ':' + m.threadId + ':' + m.sender);
+        if (seen[key]) return false;
+        seen[key] = true;
+        return true;
+      });
+      renderFeedList();
+    }
+  }
+
+  function renderFeedList() {
+    var list = document.getElementById('feed-list');
+    var msgs = state.feedMessages;
+    document.getElementById('feed-count').textContent = msgs.length + ' messages';
+
+    if (msgs.length === 0) {
+      list.innerHTML = '<div class="empty-state">No messages yet. Waiting for feed...</div>';
+      return;
+    }
+
+    var html = '';
+    for (var i = msgs.length - 1; i >= Math.max(0, msgs.length - 200); i--) {
+      var m = msgs[i];
+      var dirArrow = m.direction === 'in' ? '&rarr;' : '&larr;';
+      var mCls = modelClass(m.model);
+      var preview = truncate(m.message || '', 120);
+
+      html += '<div class="feed-item" data-idx="' + i + '">' +
+        '<div class="meta">' +
+          '<span>' + formatTimestamp(m.ts) + '</span>' +
+          ' <span class="badge badge-blue">t/' + (m.threadId || '?') + '</span>' +
+          ' <span>' + escapeHtml(m.sender || '?') + '</span>' +
+          ' <span>' + dirArrow + '</span>' +
+          (m.model ? ' <span class="' + mCls + '">' + escapeHtml(m.model) + '</span>' : '') +
+        '</div>' +
+        '<div class="preview">' + escapeHtml(preview) + '</div>' +
+        '<div class="full-content">' + escapeHtml(m.message || '') + '</div>' +
+      '</div>';
+    }
+
+    list.innerHTML = html;
+
+    // Toggle expand
+    list.querySelectorAll('.feed-item').forEach(function(el) {
+      el.onclick = function() { el.classList.toggle('expanded'); };
+    });
+
+    // Auto-scroll
+    if (!state.feedPaused) {
+      list.scrollTop = 0; // newest at top
+    }
+  }
+
+  function updateFeedPauseBtn() {
+    var btn = document.getElementById('feed-pause-btn');
+    if (state.feedPaused) {
+      btn.textContent = 'Resume';
+      btn.classList.add('active');
+    } else {
+      btn.textContent = 'Pause';
+      btn.classList.remove('active');
+    }
+  }
+
+  // ─── View 3: Thread Detail ───
+
+  async function initThread(threadId) {
+    if (!threadId) {
+      location.hash = '#overview';
+      return;
+    }
+
+    document.getElementById('thread-title').textContent = 'Thread #' + threadId;
+
+    // Fetch thread info
+    var data = await api('/api/threads/' + threadId);
+    if (!data) {
+      document.getElementById('thread-header-info').innerHTML =
+        '<div class="empty-state">Could not load thread info</div>';
+      document.getElementById('thread-chat').innerHTML = '';
+      return;
+    }
+
+    var config = data.config || {};
+    var messages = data.messages || [];
+
+    // Header
+    document.getElementById('thread-header-info').innerHTML =
+      '<div class="field"><span class="label">Name</span><span class="val">' + escapeHtml(config.name || 'Thread ' + threadId) + '</span></div>' +
+      '<div class="field"><span class="label">Model</span><span class="val">' + modelBadge(config.model) + '</span></div>' +
+      '<div class="field"><span class="label">CWD</span><span class="val">' + escapeHtml(config.cwd || 'N/A') + '</span></div>' +
+      '<div class="field"><span class="label">Last Active</span><span class="val">' + relativeTime(config.lastActive) + '</span></div>' +
+      (config.isMaster ? '<div class="field"><span class="label">Role</span><span class="val"><span class="badge badge-yellow">master</span></span></div>' : '');
+
+    // Chat bubbles
+    var chat = document.getElementById('thread-chat');
+    if (messages.length === 0) {
+      chat.innerHTML = '<div class="empty-state">No messages in this thread</div>';
+      return;
+    }
+
+    var html = '';
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i];
+      var dir = m.direction === 'out' ? 'out' : 'in';
+      html += '<div class="chat-bubble ' + dir + '">' +
+        '<div class="bubble-meta">' +
+          '<span>' + escapeHtml(m.sender || '') + '</span>' +
+          '<span>' + formatTimestamp(m.ts) + '</span>' +
+          (m.model ? modelBadge(m.model) : '') +
+        '</div>' +
+        '<div class="bubble-content">' + escapeHtml(m.message || '') + '</div>' +
+      '</div>';
+    }
+
+    chat.innerHTML = html;
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  // ─── View 4: Routing Inspector ───
+
+  function initRouting() {
+    fetchRoutingRecent();
+
+    closeSSE('routing');
+    state.eventSources.routing = createSSE('/api/routing/feed', function(evt) {
+      try {
+        var entry = JSON.parse(evt.data);
+        state.routingEntries.unshift(entry);
+        if (state.routingEntries.length > 200) state.routingEntries.pop();
+        renderRoutingTable();
+      } catch(e) {}
+    });
+  }
+
+  async function fetchRoutingRecent() {
+    var data = await api('/api/routing/recent?n=50');
+    if (data && Array.isArray(data)) {
+      state.routingEntries = data.reverse();
+      renderRoutingTable();
+    }
+  }
+
+  function renderRoutingTable() {
+    var entries = state.routingEntries;
+
+    // Summary
+    var counts = { SIMPLE: 0, MEDIUM: 0, COMPLEX: 0 };
+    entries.forEach(function(e) { if (counts[e.tier] !== undefined) counts[e.tier]++; });
+    var total = entries.length || 1;
+
+    document.getElementById('routing-summary').innerHTML =
+      '<div class="tier-box"><div class="tier-dot" style="background:var(--accent-green)"></div>' +
+        'SIMPLE: ' + counts.SIMPLE + ' (' + (counts.SIMPLE / total * 100).toFixed(0) + '%)</div>' +
+      '<div class="tier-box"><div class="tier-dot" style="background:var(--accent-blue)"></div>' +
+        'MEDIUM: ' + counts.MEDIUM + ' (' + (counts.MEDIUM / total * 100).toFixed(0) + '%)</div>' +
+      '<div class="tier-box"><div class="tier-dot" style="background:var(--accent-purple)"></div>' +
+        'COMPLEX: ' + counts.COMPLEX + ' (' + (counts.COMPLEX / total * 100).toFixed(0) + '%)</div>';
+
+    // Table
+    var tbody = document.getElementById('routing-tbody');
+    if (entries.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No routing decisions recorded</td></tr>';
+      return;
+    }
+
+    var html = '';
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      html += '<tr>' +
+        '<td>' + formatTimestamp(e.ts) + '</td>' +
+        '<td>' + tierBadge(e.tier) + '</td>' +
+        '<td>' + modelBadge(e.model) + '</td>' +
+        '<td>' + ((e.confidence || 0) * 100).toFixed(0) + '%</td>' +
+        '<td>' + (e.tokens || e.estimatedTokens || '?') + '</td>' +
+        '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml((e.signals || []).join(', ')) + '">' +
+          escapeHtml((e.signals || []).join(', ')) +
+        '</td>' +
+      '</tr>';
+    }
+
+    tbody.innerHTML = html;
+  }
+
+  // ─── View 5: Prompt Inspector ───
+
+  async function initPrompts() {
+    var data = await api('/api/prompts/recent?n=20');
+    var container = document.getElementById('prompts-list');
+
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      container.innerHTML = '<div class="empty-state">No prompt data available</div>';
+      return;
+    }
+
+    var maxLen = Math.max.apply(null, data.map(function(p) { return p.promptLength || p.length || 0; })) || 1;
+
+    var html = '';
+    for (var i = data.length - 1; i >= 0; i--) {
+      var p = data[i];
+      var pLen = p.promptLength || p.length || 0;
+      var pct = (pLen / maxLen * 100).toFixed(0);
+      var injected = p.historyInjected;
+
+      html += '<div class="prompt-card" data-idx="' + i + '">' +
+        '<div class="prompt-header">' +
+          '<span class="arrow">&#9654;</span>' +
+          '<span>' + formatTimestamp(p.ts || p.timestamp || 0) + '</span>' +
+          '<span class="badge badge-blue">t/' + (p.threadId || '?') + '</span>' +
+          modelBadge(p.model || '') +
+          '<span style="color:var(--text-secondary)">' + pLen + ' chars</span>' +
+          (injected ? '<span class="badge badge-green">history</span>' : '') +
+          '<div class="prompt-length-bar"><div class="prompt-length-fill" style="width:' + pct + '%;background:var(--accent-blue)"></div></div>' +
+        '</div>' +
+        '<div class="prompt-body">' + escapeHtml(p.prompt || p.content || p.text || JSON.stringify(p, null, 2)) + '</div>' +
+      '</div>';
+    }
+
+    container.innerHTML = html;
+
+    container.querySelectorAll('.prompt-card').forEach(function(card) {
+      card.querySelector('.prompt-header').onclick = function() {
+        card.classList.toggle('expanded');
+      };
+    });
+  }
+
+  // ─── View 6: Metrics ───
+
+  function initMetrics() {
+    fetchMetrics();
+    clearInterval_('metrics');
+    state.intervals.metrics = setInterval(fetchMetrics, 5000);
+  }
+
+  async function fetchMetrics() {
+    var data = await api('/api/metrics');
+    if (!data) {
+      document.getElementById('metrics-bars').innerHTML =
+        '<div class="empty-state">Cannot reach metrics endpoint</div>';
+      return;
+    }
+
+    var sys = data.system || data;
+    var cpu = sys.cpuPercent || 0;
+    var ramUsed = sys.ramUsedMB || 0;
+    var ramTotal = sys.ramTotalMB || 1;
+    var ramPct = ramUsed / ramTotal * 100;
+    var diskUsed = sys.diskUsedGB || 0;
+    var diskTotal = sys.diskTotalGB || 1;
+    var diskPct = diskUsed / diskTotal * 100;
+    var load = sys.loadAverage || [0, 0, 0];
+    var loadPct = Math.min(load[0] / (sys.cpuCount || 4) * 100, 100);
+
+    var metrics = [
+      { label: 'CPU', value: cpu, text: cpu.toFixed(1) + '%' },
+      { label: 'RAM', value: ramPct, text: ramUsed.toFixed(0) + '/' + ramTotal.toFixed(0) + ' MB' },
+      { label: 'Disk', value: diskPct, text: diskUsed.toFixed(1) + '/' + diskTotal.toFixed(1) + ' GB' },
+      { label: 'Load (1m)', value: loadPct, text: load[0].toFixed(2) },
+    ];
+
+    var html = '';
+    for (var i = 0; i < metrics.length; i++) {
+      var m = metrics[i];
+      html += '<div class="metric-row">' +
+        '<div class="metric-label">' + m.label + '</div>' +
+        '<div class="metric-bar-wrap">' +
+          '<div class="metric-bar-fill" style="width:' + Math.min(m.value, 100) + '%;background:' + barColor(m.value) + '"></div>' +
+          '<span class="metric-bar-text">' + m.text + '</span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    // Additional stats if available
+    if (data.uptime) {
+      var upH = Math.floor(data.uptime / 3600);
+      var upM = Math.floor((data.uptime % 3600) / 60);
+      html += '<div class="metric-row" style="margin-top:16px">' +
+        '<div class="metric-label">Uptime</div>' +
+        '<div style="color:var(--text-primary)">' + upH + 'h ' + upM + 'm</div>' +
+      '</div>';
+    }
+
+    if (data.sessions !== undefined) {
+      html += '<div class="metric-row">' +
+        '<div class="metric-label">Sessions</div>' +
+        '<div style="color:var(--accent-blue)">' + data.sessions + ' active</div>' +
+      '</div>';
+    }
+
+    document.getElementById('metrics-bars').innerHTML = html;
+  }
+
+  // ─── View 7: Logs ───
+
+  function initLogs() {
+    state.logPaused = false;
+    state.logMessages = [];
+    updateLogPauseBtn();
+
+    // Tab buttons
+    document.querySelectorAll('[data-log]').forEach(function(btn) {
+      btn.onclick = function() {
+        document.querySelectorAll('[data-log]').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        state.logStream = btn.dataset.log;
+        state.logMessages = [];
+        connectLogSSE();
+      };
+    });
+
+    document.getElementById('log-pause-btn').onclick = function() {
+      state.logPaused = !state.logPaused;
+      updateLogPauseBtn();
+    };
+
+    document.getElementById('log-clear-btn').onclick = function() {
+      state.logMessages = [];
+      renderLogList();
+    };
+
+    document.getElementById('log-filter').oninput = function(e) {
+      state.logFilter = e.target.value.toLowerCase();
+      renderLogList();
+    };
+
+    connectLogSSE();
+  }
+
+  function connectLogSSE() {
+    closeSSE('logs');
+    var url = '/api/logs/' + state.logStream;
+    state.eventSources.logs = createSSE(url, function(evt) {
+      try {
+        var line = typeof evt.data === 'string' ? evt.data : JSON.stringify(evt.data);
+        state.logMessages.push(line);
+        if (state.logMessages.length > 1000) state.logMessages.shift();
+        if (!state.logPaused) renderLogList();
+      } catch(e) {}
+    });
+  }
+
+  function renderLogList() {
+    var list = document.getElementById('log-list');
+    var msgs = state.logMessages;
+
+    if (state.logFilter) {
+      msgs = msgs.filter(function(m) { return m.toLowerCase().indexOf(state.logFilter) >= 0; });
+    }
+
+    if (msgs.length === 0) {
+      list.innerHTML = '<div class="empty-state">No log entries. Waiting for stream...</div>';
+      return;
+    }
+
+    var html = '';
+    var start = Math.max(0, msgs.length - 500);
+    for (var i = start; i < msgs.length; i++) {
+      var line = msgs[i];
+      var cls = 'info';
+      var lower = line.toLowerCase();
+      if (lower.indexOf('error') >= 0 || lower.indexOf('err]') >= 0) cls = 'error';
+      else if (lower.indexOf('warn') >= 0) cls = 'warn';
+      html += '<div class="log-line ' + cls + '">' + escapeHtml(line) + '</div>';
+    }
+
+    list.innerHTML = html;
+
+    if (!state.logPaused) {
+      list.scrollTop = list.scrollHeight;
+    }
+  }
+
+  function updateLogPauseBtn() {
+    var btn = document.getElementById('log-pause-btn');
+    if (state.logPaused) {
+      btn.textContent = 'Resume';
+      btn.classList.add('active');
+    } else {
+      btn.textContent = 'Pause';
+      btn.classList.remove('active');
+    }
+  }
+
+  // ─── Init ───
+
+  window.addEventListener('hashchange', navigate);
+
+  // Set default hash if none
+  if (!location.hash || location.hash === '#') {
+    location.hash = '#overview';
+  }
+
+  navigate();
+
+})();
+</script>
+</body>
+</html>

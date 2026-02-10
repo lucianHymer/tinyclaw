@@ -1,11 +1,17 @@
 #!/bin/bash
-# TinyClaw - Telegram Forum Agent with Smart Routing
+# TinyClaw - Docker Compose Wrapper
+# Manages the TinyClaw stack: bot, broker, dashboard, cloudflared
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/.tinyclaw/logs"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 SETTINGS_FILE="$SCRIPT_DIR/.tinyclaw/settings.json"
-QUEUE_INCOMING="$SCRIPT_DIR/.tinyclaw/queue/incoming"
-PID_DIR="$SCRIPT_DIR/.tinyclaw/pids"
+LOG_DIR="$SCRIPT_DIR/.tinyclaw/logs"
+
+# Compose project name is derived from the directory name
+COMPOSE_PROJECT="tinyclaw"
+VOLUME_NAME="${COMPOSE_PROJECT}_tinyclaw-data"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -13,344 +19,310 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-mkdir -p "$LOG_DIR" "$QUEUE_INCOMING" "$PID_DIR"
+mkdir -p "$LOG_DIR"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/daemon.log"
 }
 
-# Check if systemd services are installed
-has_systemd() {
-    systemctl list-unit-files tinyclaw-telegram.service &>/dev/null
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+# Run docker compose with the correct project directory
+dc() {
+    docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
 }
 
-# Load settings from JSON
-load_settings() {
-    if [ ! -f "$SETTINGS_FILE" ]; then
-        return 1
-    fi
-
-    TELEGRAM_BOT_TOKEN=$(grep -o '"telegram_bot_token"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_FILE" | cut -d'"' -f4)
-    TELEGRAM_CHAT_ID=$(grep -o '"telegram_chat_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_FILE" | cut -d'"' -f4)
-    MODEL=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_FILE" | cut -d'"' -f4)
-
-    return 0
+# Get the host mount point of the tinyclaw-data volume
+volume_mountpoint() {
+    docker volume inspect "$VOLUME_NAME" --format '{{ .Mountpoint }}' 2>/dev/null
 }
 
-# Check if processes are running
-is_running() {
-    pgrep -f "dist/$1.js" > /dev/null 2>&1
-}
+# Read a setting from settings.json (checks volume first, then local)
+read_settings_file() {
+    local mp
+    mp=$(volume_mountpoint 2>/dev/null || true)
 
-# Start daemon
-start_daemon() {
-    if is_running "telegram-client" && is_running "queue-processor"; then
-        echo -e "${YELLOW}TinyClaw is already running${NC}"
-        return 1
-    fi
-
-    log "Starting TinyClaw..."
-
-    # Check if Node.js dependencies are installed
-    if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
-        echo -e "${YELLOW}Installing Node.js dependencies...${NC}"
-        cd "$SCRIPT_DIR"
-        npm install
-    fi
-
-    # Build TypeScript if needed
-    if [ ! -d "$SCRIPT_DIR/dist" ] || [ "$SCRIPT_DIR/src/telegram-client.ts" -nt "$SCRIPT_DIR/dist/telegram-client.js" ] || [ "$SCRIPT_DIR/src/queue-processor.ts" -nt "$SCRIPT_DIR/dist/queue-processor.js" ]; then
-        echo -e "${YELLOW}Building TypeScript...${NC}"
-        cd "$SCRIPT_DIR"
-        npm run build
-    fi
-
-    # Load settings or run setup wizard
-    if ! load_settings; then
-        echo -e "${YELLOW}No configuration found. Running setup wizard...${NC}"
-        echo ""
-        "$SCRIPT_DIR/setup-wizard.sh"
-
-        if ! load_settings; then
-            echo -e "${RED}Setup failed or was cancelled${NC}"
-            return 1
-        fi
-    fi
-
-    # Validate Telegram settings
-    if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-        echo -e "${RED}Telegram bot token is missing${NC}"
-        echo "Run './tinyclaw.sh setup' to reconfigure"
-        return 1
-    fi
-
-    if [ -z "$TELEGRAM_CHAT_ID" ]; then
-        echo -e "${RED}Telegram chat ID is missing${NC}"
-        echo "Run './tinyclaw.sh setup' to reconfigure"
-        return 1
-    fi
-
-    if has_systemd; then
-        # Use systemd
-        sudo systemctl start tinyclaw-telegram tinyclaw-queue
-        echo -e "${GREEN}TinyClaw started via systemd${NC}"
-        echo "  Logs: journalctl -f -u tinyclaw-telegram -u tinyclaw-queue"
+    if [ -n "$mp" ] && sudo test -f "$mp/settings.json"; then
+        sudo cat "$mp/settings.json"
+    elif [ -f "$SETTINGS_FILE" ]; then
+        cat "$SETTINGS_FILE"
     else
-        # Fallback: background processes with PID tracking
-        cd "$SCRIPT_DIR"
-        node dist/telegram-client.js >> "$LOG_DIR/telegram.log" 2>&1 &
-        echo $! > "$PID_DIR/telegram.pid"
-
-        node dist/queue-processor.js >> "$LOG_DIR/queue.log" 2>&1 &
-        echo $! > "$PID_DIR/queue.pid"
-
-        echo -e "${GREEN}TinyClaw started (background processes)${NC}"
-        echo "  Logs: ./tinyclaw.sh logs"
+        return 1
     fi
-
-    log "TinyClaw started"
 }
 
-# Stop daemon
-stop_daemon() {
-    log "Stopping TinyClaw..."
+# ─── Commands ─────────────────────────────────────────────────────────────────
 
-    if has_systemd; then
-        sudo systemctl stop tinyclaw-telegram tinyclaw-queue 2>/dev/null
+cmd_start() {
+    log "Starting TinyClaw stack..."
+    dc up -d
+    echo -e "${GREEN}TinyClaw stack started${NC}"
+    echo "  Services: bot, broker, dashboard, cloudflared"
+    echo "  Logs:     ./tinyclaw.sh logs"
+    log "TinyClaw stack started"
+}
+
+cmd_stop() {
+    log "Stopping TinyClaw stack..."
+    dc down
+    echo -e "${GREEN}TinyClaw stack stopped${NC}"
+    log "TinyClaw stack stopped"
+}
+
+cmd_restart() {
+    if [ -n "${2:-}" ]; then
+        log "Restarting service: $2"
+        dc restart "$2"
+        echo -e "${GREEN}Restarted: $2${NC}"
+    else
+        log "Restarting TinyClaw stack..."
+        dc restart
+        echo -e "${GREEN}TinyClaw stack restarted${NC}"
     fi
-
-    # Kill by PID files
-    for svc in telegram queue; do
-        local pidfile="$PID_DIR/$svc.pid"
-        if [ -f "$pidfile" ]; then
-            kill "$(cat "$pidfile")" 2>/dev/null
-            rm -f "$pidfile"
-        fi
-    done
-
-    # Fallback: pkill
-    pkill -f "dist/telegram-client.js" 2>/dev/null || true
-    pkill -f "dist/queue-processor.js" 2>/dev/null || true
-
-    echo -e "${GREEN}TinyClaw stopped${NC}"
-    log "TinyClaw stopped"
+    log "TinyClaw restart complete"
 }
 
-# Install systemd services
-install_systemd() {
-    echo -e "${BLUE}Installing systemd services...${NC}"
-
-    # Update WorkingDirectory and User in service files
-    local user
-    user=$(whoami)
-
-    for svc in tinyclaw-telegram tinyclaw-queue; do
-        local src="$SCRIPT_DIR/systemd/$svc.service"
-        if [ ! -f "$src" ]; then
-            echo -e "${RED}Missing $src${NC}"
-            return 1
-        fi
-
-        # Substitute placeholders for this machine
-        sed "s|__USER__|$user|g;s|__WORKING_DIR__|$SCRIPT_DIR|g" \
-            "$src" | sudo tee "/etc/systemd/system/$svc.service" > /dev/null
-    done
-
-    sudo systemctl daemon-reload
-    sudo systemctl enable tinyclaw-telegram tinyclaw-queue
-
-    echo -e "${GREEN}Systemd services installed and enabled${NC}"
-    echo "  Start:   ./tinyclaw.sh start"
-    echo "  Logs:    journalctl -f -u tinyclaw-telegram -u tinyclaw-queue"
-}
-
-# Send message to queue from CLI
-send_message() {
-    local message="$1"
-
-    mkdir -p "$QUEUE_INCOMING"
-
-    local MESSAGE_ID="cli_$(date +%s)_$$"
-
-    jq -n \
-      --arg channel "telegram" \
-      --arg source "cli" \
-      --argjson threadId 1 \
-      --arg sender "CLI" \
-      --arg senderId "cli" \
-      --arg message "$message" \
-      --argjson isReply false \
-      --argjson timestamp "$(date +%s)000" \
-      --arg messageId "$MESSAGE_ID" \
-      '{channel: $channel, source: $source, threadId: $threadId, sender: $sender, senderId: $senderId, message: $message, isReply: $isReply, timestamp: $timestamp, messageId: $messageId}' \
-      > "$QUEUE_INCOMING/${MESSAGE_ID}.json"
-
-    echo -e "${GREEN}Message queued: $MESSAGE_ID${NC}"
-    log "[cli] Queued: ${message:0:50}..."
-}
-
-# Status
-status_daemon() {
+cmd_status() {
     echo -e "${BLUE}TinyClaw Status${NC}"
     echo "==============="
     echo ""
 
-    if has_systemd; then
-        echo -e "${BLUE}Mode: systemd${NC}"
-        echo ""
-        systemctl --no-pager status tinyclaw-telegram 2>/dev/null | head -4
-        echo ""
-        systemctl --no-pager status tinyclaw-queue 2>/dev/null | head -4
-    else
-        echo -e "${BLUE}Mode: background processes${NC}"
-    fi
-
+    echo -e "${BLUE}Docker Compose Services:${NC}"
+    dc ps
     echo ""
 
-    if is_running "telegram-client"; then
-        echo -e "Telegram Client: ${GREEN}Running${NC}"
-    else
-        echo -e "Telegram Client: ${RED}Not Running${NC}"
+    # Show resource usage for running containers
+    local containers
+    containers=$(docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --format '{{.Names}}' 2>/dev/null || true)
+    if [ -n "$containers" ]; then
+        echo -e "${BLUE}Resource Usage:${NC}"
+        docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" $containers
     fi
-
-    if is_running "queue-processor"; then
-        echo -e "Queue Processor: ${GREEN}Running${NC}"
-    else
-        echo -e "Queue Processor: ${RED}Not Running${NC}"
-    fi
-
-    echo ""
-    echo "Recent Telegram Activity:"
-    echo "-------------------------"
-    tail -n 5 "$LOG_DIR/telegram.log" 2>/dev/null || echo "  No Telegram activity yet"
-
-    echo ""
-    echo "Recent Queue Activity:"
-    echo "----------------------"
-    tail -n 5 "$LOG_DIR/queue.log" 2>/dev/null || echo "  No queue activity yet"
 }
 
-# View logs
-logs() {
-    if has_systemd; then
-        case "${1:-all}" in
-            telegram|tg)
-                journalctl -f -u tinyclaw-telegram
-                ;;
-            queue|q)
-                journalctl -f -u tinyclaw-queue
-                ;;
-            *)
-                journalctl -f -u tinyclaw-telegram -u tinyclaw-queue
-                ;;
-        esac
+cmd_logs() {
+    local service="${2:-}"
+
+    case "$service" in
+        bot|broker|dashboard|cloudflared)
+            dc logs -f "$service"
+            ;;
+        ""|all)
+            dc logs -f
+            ;;
+        *)
+            echo -e "${RED}Unknown service: $service${NC}"
+            echo "Available services: bot, broker, dashboard, cloudflared, all"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_install() {
+    echo -e "${BLUE}Installing systemd service...${NC}"
+
+    local src="$SCRIPT_DIR/systemd/tinyclaw.service"
+    if [ ! -f "$src" ]; then
+        echo -e "${RED}Missing $src${NC}"
+        return 1
+    fi
+
+    local user
+    user=$(whoami)
+
+    sed "s|__USER__|$user|g;s|__WORKING_DIR__|$SCRIPT_DIR|g" \
+        "$src" | sudo tee "/etc/systemd/system/tinyclaw.service" > /dev/null
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable tinyclaw.service
+
+    echo -e "${GREEN}Systemd service installed and enabled${NC}"
+    echo "  Start:   sudo systemctl start tinyclaw"
+    echo "  Status:  sudo systemctl status tinyclaw"
+    echo "  Logs:    journalctl -f -u tinyclaw"
+}
+
+cmd_send() {
+    local message="${2:-}"
+    if [ -z "$message" ]; then
+        echo "Usage: $0 send <message>"
+        exit 1
+    fi
+
+    local MESSAGE_ID="cli_$(date +%s)_$$"
+    local json
+    json=$(jq -n \
+        --arg channel "telegram" \
+        --arg source "cli" \
+        --argjson threadId 1 \
+        --arg sender "CLI" \
+        --arg senderId "cli" \
+        --arg message "$message" \
+        --argjson isReply false \
+        --argjson timestamp "$(date +%s)000" \
+        --arg messageId "$MESSAGE_ID" \
+        '{channel: $channel, source: $source, threadId: $threadId, sender: $sender, senderId: $senderId, message: $message, isReply: $isReply, timestamp: $timestamp, messageId: $messageId}')
+
+    # Check if bot container is running
+    if dc ps --status running --format '{{.Service}}' 2>/dev/null | grep -q '^bot$'; then
+        echo "$json" | dc exec -T bot sh -c "cat > /app/.tinyclaw/queue/incoming/${MESSAGE_ID}.json"
+        echo -e "${GREEN}Message queued via container: $MESSAGE_ID${NC}"
+    elif [ -d "$SCRIPT_DIR/.tinyclaw/queue/incoming" ]; then
+        # Fallback: write to local filesystem (migration compat)
+        echo "$json" > "$SCRIPT_DIR/.tinyclaw/queue/incoming/${MESSAGE_ID}.json"
+        echo -e "${GREEN}Message queued to local filesystem: $MESSAGE_ID${NC}"
+        echo -e "${YELLOW}Note: bot container is not running${NC}"
     else
-        case "${1:-telegram}" in
-            telegram|tg)
-                tail -f "$LOG_DIR/telegram.log"
-                ;;
-            queue|q)
-                tail -f "$LOG_DIR/queue.log"
-                ;;
-            daemon|all)
-                tail -f "$LOG_DIR/daemon.log"
+        echo -e "${RED}Bot container is not running and no local queue directory exists${NC}"
+        echo "Start the stack first: ./tinyclaw.sh start"
+        exit 1
+    fi
+
+    log "[cli] Queued: ${message:0:50}..."
+}
+
+cmd_migrate() {
+    echo -e "${BLUE}Migrating local .tinyclaw/ data into Docker volume...${NC}"
+
+    local src_dir="$SCRIPT_DIR/.tinyclaw"
+    if [ ! -d "$src_dir" ]; then
+        echo -e "${RED}No local .tinyclaw/ directory found${NC}"
+        exit 1
+    fi
+
+    # Ensure the stack is up so we can copy into the volume
+    if ! dc ps --status running --format '{{.Service}}' 2>/dev/null | grep -q '^bot$'; then
+        echo -e "${YELLOW}Starting bot container for migration...${NC}"
+        dc up -d bot
+        sleep 3
+    fi
+
+    # Files to migrate
+    local files=("threads.json" "message-history.jsonl" "settings.json" "message-models.json")
+
+    for f in "${files[@]}"; do
+        if [ -f "$src_dir/$f" ]; then
+            echo "  Copying $f..."
+            dc cp "$src_dir/$f" "bot:/app/.tinyclaw/$f"
+        else
+            echo -e "  ${YELLOW}Skipping $f (not found)${NC}"
+        fi
+    done
+
+    # Copy queue directory contents if any
+    if [ -d "$src_dir/queue" ]; then
+        echo "  Copying queue directory..."
+        dc exec -T bot sh -c "mkdir -p /app/.tinyclaw/queue/incoming /app/.tinyclaw/queue/outgoing"
+        for qfile in "$src_dir/queue/incoming/"*.json; do
+            [ -f "$qfile" ] && dc cp "$qfile" "bot:/app/.tinyclaw/queue/incoming/$(basename "$qfile")"
+        done 2>/dev/null || true
+    fi
+
+    # Clear sessionId from migrated threads.json (sessions don't survive container boundary)
+    echo "  Clearing sessionId from threads.json..."
+    dc exec -T bot sh -c '
+        if [ -f /app/.tinyclaw/threads.json ]; then
+            tmp=$(mktemp)
+            jq "walk(if type == \"object\" and has(\"sessionId\") then del(.sessionId) else . end)" \
+                /app/.tinyclaw/threads.json > "$tmp" && mv "$tmp" /app/.tinyclaw/threads.json
+        fi
+    '
+
+    echo -e "${GREEN}Migration complete${NC}"
+    echo "  Cleared sessionId values (sessions are not portable across boundaries)"
+    echo "  Restart the stack to pick up migrated data: ./tinyclaw.sh restart"
+}
+
+cmd_build() {
+    echo -e "${BLUE}Building TinyClaw Docker images...${NC}"
+    dc build "$@"
+    echo -e "${GREEN}Build complete${NC}"
+}
+
+cmd_model() {
+    local new_model="${2:-}"
+
+    if [ -z "$new_model" ]; then
+        # Show current model
+        local settings
+        settings=$(read_settings_file 2>/dev/null) || {
+            echo -e "${RED}No settings file found${NC}"
+            exit 1
+        }
+        local current_model
+        current_model=$(echo "$settings" | grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+        echo -e "${BLUE}Current model: ${GREEN}$current_model${NC}"
+    else
+        case "$new_model" in
+            sonnet|opus)
+                # Update settings.json inside the volume via the bot container
+                if dc ps --status running --format '{{.Service}}' 2>/dev/null | grep -q '^bot$'; then
+                    dc exec -T bot sh -c "
+                        if [ -f /app/.tinyclaw/settings.json ]; then
+                            tmp=\$(mktemp)
+                            sed 's/\"model\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"model\": \"$new_model\"/' \
+                                /app/.tinyclaw/settings.json > \"\$tmp\" && mv \"\$tmp\" /app/.tinyclaw/settings.json
+                        else
+                            echo 'settings.json not found' >&2
+                            exit 1
+                        fi
+                    "
+                    echo -e "${GREEN}Model switched to: $new_model${NC}"
+                    echo "Note: Changes take effect on next message."
+                elif [ -f "$SETTINGS_FILE" ]; then
+                    # Fallback: edit local file
+                    sed -i "s/\"model\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"model\": \"$new_model\"/" "$SETTINGS_FILE"
+                    echo -e "${GREEN}Model switched to: $new_model (local settings)${NC}"
+                    echo -e "${YELLOW}Note: Bot container is not running. Change applies to local file only.${NC}"
+                else
+                    echo -e "${RED}No settings file found and bot container is not running${NC}"
+                    exit 1
+                fi
                 ;;
             *)
-                echo "Usage: $0 logs [telegram|queue|daemon]"
+                echo "Usage: $0 model {sonnet|opus}"
+                exit 1
                 ;;
         esac
     fi
 }
+
+cmd_help() {
+    echo -e "${BLUE}TinyClaw - Docker Compose Wrapper${NC}"
+    echo ""
+    echo "Usage: $0 <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  start                  Start the full stack (bot, broker, dashboard, cloudflared)"
+    echo "  stop                   Stop and remove all containers"
+    echo "  restart [service]      Restart all services, or a specific service"
+    echo "  status                 Show container status and resource usage"
+    echo "  logs [service]         Follow logs (bot|broker|dashboard|cloudflared|all)"
+    echo "  build                  Build Docker images"
+    echo "  install                Install systemd unit for auto-start on boot"
+    echo "  send <msg>             Send a CLI message to the queue (thread 1)"
+    echo "  migrate                Copy local .tinyclaw/ data into Docker volume"
+    echo "  model [sonnet|opus]    Show or switch the Claude model"
+    echo "  help                   Show this help message"
+    echo ""
+    echo "Services: bot, broker, dashboard, cloudflared"
+    echo ""
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-    start)
-        start_daemon
-        ;;
-    stop)
-        stop_daemon
-        ;;
-    restart)
-        stop_daemon
-        sleep 2
-        start_daemon
-        ;;
-    status)
-        status_daemon
-        ;;
-    install)
-        install_systemd
-        ;;
-    send)
-        if [ -z "$2" ]; then
-            echo "Usage: $0 send <message>"
-            exit 1
-        fi
-        send_message "$2"
-        ;;
-    logs)
-        logs "$2"
-        ;;
-    reset)
-        echo -e "${YELLOW}Resetting conversation...${NC}"
-        touch "$SCRIPT_DIR/.tinyclaw/reset_flag"
-        echo -e "${GREEN}Reset flag set${NC}"
-        echo ""
-        echo "The next message will start a fresh conversation (without -c)."
-        echo "After that, conversation will continue normally."
-        ;;
-    model)
-        if [ -z "$2" ]; then
-            if [ -f "$SETTINGS_FILE" ]; then
-                CURRENT_MODEL=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_FILE" | cut -d'"' -f4)
-                echo -e "${BLUE}Current model: ${GREEN}$CURRENT_MODEL${NC}"
-            else
-                echo -e "${RED}No settings file found${NC}"
-                exit 1
-            fi
-        else
-            case "$2" in
-                sonnet|opus)
-                    if [ ! -f "$SETTINGS_FILE" ]; then
-                        echo -e "${RED}No settings file found. Run setup first.${NC}"
-                        exit 1
-                    fi
-
-                    if [[ "$OSTYPE" == "darwin"* ]]; then
-                        sed -i '' "s/\"model\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"model\": \"$2\"/" "$SETTINGS_FILE"
-                    else
-                        sed -i "s/\"model\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"model\": \"$2\"/" "$SETTINGS_FILE"
-                    fi
-
-                    echo -e "${GREEN}Model switched to: $2${NC}"
-                    echo "Note: Changes take effect on next message."
-                    ;;
-                *)
-                    echo "Usage: $0 model {sonnet|opus}"
-                    exit 1
-                    ;;
-            esac
-        fi
-        ;;
-    setup)
-        "$SCRIPT_DIR/setup-wizard.sh"
-        ;;
-    *)
-        echo -e "${BLUE}TinyClaw - Telegram Forum Agent with Smart Routing${NC}"
-        echo ""
-        echo "Usage: $0 {start|stop|restart|status|install|setup|send|logs|reset|model}"
-        echo ""
-        echo "Commands:"
-        echo "  start              Start TinyClaw"
-        echo "  stop               Stop all processes"
-        echo "  restart            Restart TinyClaw"
-        echo "  status             Show current status"
-        echo "  install            Install systemd services (Ubuntu)"
-        echo "  setup              Run setup wizard"
-        echo "  send <msg>         Send message to queue from CLI"
-        echo "  logs [type]        View logs (telegram|queue|all)"
-        echo "  reset              Reset conversation"
-        echo "  model [sonnet|opus] Show or switch Claude model"
-        echo ""
-        exit 1
-        ;;
+    start)      cmd_start ;;
+    stop)       cmd_stop ;;
+    restart)    cmd_restart "$@" ;;
+    status)     cmd_status ;;
+    logs)       cmd_logs "$@" ;;
+    build)      shift; cmd_build "$@" ;;
+    install)    cmd_install ;;
+    send)       cmd_send "$@" ;;
+    migrate)    cmd_migrate ;;
+    model)      cmd_model "$@" ;;
+    help|--help|-h)
+                cmd_help ;;
+    *)          cmd_help; exit 1 ;;
 esac

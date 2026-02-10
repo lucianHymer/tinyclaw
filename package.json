@@ -6,16 +6,19 @@
   "scripts": {
     "build": "tsc",
     "telegram": "node dist/telegram-client.js",
-    "queue": "node dist/queue-processor.js"
+    "queue": "node dist/queue-processor.js",
+    "dashboard": "node dist/dashboard.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.38",
+    "express": "^5.1.0",
     "@grammyjs/auto-chat-action": "^0.1.1",
     "@grammyjs/auto-retry": "^2.0.2",
     "grammy": "^1.37.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",
     "typescript": "^5.9.3"
   }

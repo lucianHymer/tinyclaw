@@ -37,8 +37,10 @@ export interface Settings {
 // ─── Constants ───
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
-const THREADS_FILE = path.join(SCRIPT_DIR, ".tinyclaw/threads.json");
-const SETTINGS_FILE = path.join(SCRIPT_DIR, ".tinyclaw/settings.json");
+const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
+const THREADS_FILE = path.join(TINYCLAW_DIR, "threads.json");
+const SETTINGS_FILE = path.join(TINYCLAW_DIR, "settings.json");
+const DEFAULT_CWD = process.env.DEFAULT_CWD || "/home/clawcian/.openclaw/workspace";
 export const MAX_CONCURRENT_SESSIONS = 10;
 export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -59,7 +61,7 @@ export function loadThreads(): ThreadsMap {
         threadsCache = {
             "1": {
                 name: "Master",
-                cwd: "/home/clawcian/.openclaw/workspace",
+                cwd: DEFAULT_CWD,
                 model: "sonnet",
                 isMaster: true,
                 lastActive: 0,
@@ -213,7 +215,7 @@ export function configureThread(threadId: number, updates: Partial<ThreadConfig>
     } else {
         threads[key] = {
             name: filtered.name ?? `Thread ${threadId}`,
-            cwd: filtered.cwd ?? "/home/clawcian/.openclaw/workspace",
+            cwd: filtered.cwd ?? DEFAULT_CWD,
             model: filtered.model ?? "sonnet",
             isMaster: filtered.isMaster ?? false,
             lastActive: filtered.lastActive ?? Date.now(),

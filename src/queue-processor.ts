@@ -52,6 +52,9 @@ const QUEUE_DEAD_LETTER = path.join(TINYCLAW_DIR, "queue/dead-letter");
 const QUEUE_COMMANDS = path.join(TINYCLAW_DIR, "queue/commands");
 const LOG_FILE = path.join(TINYCLAW_DIR, "logs/queue.log");
 const ROUTING_LOG = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
+const PROMPTS_LOG = path.join(TINYCLAW_DIR, "logs/prompts.jsonl");
+const PROMPTS_LOG_BACKUP = path.join(TINYCLAW_DIR, "logs/prompts.1.jsonl");
+const MAX_PROMPTS_LOG_SIZE = 10 * 1024 * 1024; // 10MB
 
 // ─── Ensure queue directories exist ───
 
@@ -62,6 +65,23 @@ const ROUTING_LOG = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
         }
     },
 );
+
+// ─── Startup Recovery: move stuck processing/ files back to incoming/ ───
+
+{
+    const stuckFiles = fs.readdirSync(QUEUE_PROCESSING).filter(f => f.endsWith(".json"));
+    for (const file of stuckFiles) {
+        try {
+            fs.renameSync(path.join(QUEUE_PROCESSING, file), path.join(QUEUE_INCOMING, file));
+            console.log(`[RECOVERY] Moved stuck file back to incoming: ${file}`);
+        } catch {
+            // Best effort — file may have been cleaned up already
+        }
+    }
+    if (stuckFiles.length > 0) {
+        console.log(`[RECOVERY] Recovered ${stuckFiles.length} stuck message(s) from processing/`);
+    }
+}
 
 // ─── Tier / Model Mapping ───
 
@@ -93,6 +113,37 @@ function log(level: string, message: string): void {
     console.log(logMessage.trim());
     try {
         fs.appendFileSync(LOG_FILE, logMessage);
+    } catch {
+        // Logging should never crash the process
+    }
+}
+
+// ─── Prompt Logging ───
+
+function logPrompt(entry: {
+    threadId: number;
+    messageId: string;
+    model: string;
+    systemPromptAppend: string;
+    userMessage: string;
+    historyInjected: boolean;
+    historyLines: number;
+    promptLength: number;
+}): void {
+    try {
+        // Rotate if needed
+        if (fs.existsSync(PROMPTS_LOG)) {
+            const stats = fs.statSync(PROMPTS_LOG);
+            if (stats.size > MAX_PROMPTS_LOG_SIZE) {
+                fs.renameSync(PROMPTS_LOG, PROMPTS_LOG_BACKUP);
+            }
+        }
+        const line = JSON.stringify({
+            timestamp: Date.now(),
+            ...entry,
+            userMessage: entry.userMessage.substring(0, 500),
+        }) + "\n";
+        fs.appendFileSync(PROMPTS_LOG, line);
     } catch {
         // Logging should never crash the process
     }
@@ -363,9 +414,10 @@ async function processMessage(messageFile: string): Promise<void> {
             let threadConfig = threads[key];
 
             if (!threadConfig) {
+                const defaultCwd = process.env.DEFAULT_CWD || "/home/clawcian/.openclaw/workspace";
                 threadConfig = {
                     name: `Thread ${threadId}`,
-                    cwd: path.join("/home/clawcian/.openclaw/workspace"),
+                    cwd: defaultCwd,
                     model: effectiveModel,
                     isMaster: false,
                     lastActive: Date.now(),
@@ -389,6 +441,18 @@ async function processMessage(messageFile: string): Promise<void> {
             } else {
                 fullPrompt = `[${now}] ${prefix} ${message}`;
             }
+
+            // ─── Log assembled prompt ───
+            logPrompt({
+                threadId,
+                messageId,
+                model: effectiveModel,
+                systemPromptAppend: buildThreadPrompt(threadConfig).substring(0, 500),
+                userMessage: message,
+                historyInjected: isNewSession,
+                historyLines: isNewSession ? (buildHistoryContext(threadId, threadConfig.isMaster).split("\n").length - 1) : 0,
+                promptLength: fullPrompt.length,
+            });
 
             // ─── Send query ───
             const options = buildQueryOptions(threadId, threadConfig, effectiveModel);

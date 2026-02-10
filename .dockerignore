@@ -1,0 +1,7 @@
+node_modules
+dist
+.tinyclaw
+secrets
+.env
+*.log
+.git
