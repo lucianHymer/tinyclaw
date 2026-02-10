@@ -1,13 +1,15 @@
 #!/bin/bash
-# Session start - Just load TinyClaw context
+# Session start - Load TinyClaw context
 
 cat << 'EOF'
 🤖 TinyClaw Active
 
 Running in persistent mode with:
-- WhatsApp message integration
-- Discord message integration
-- Heartbeat monitoring (with .tinyclaw/heartbeat.md file)
+- Telegram forum integration (multi-topic sessions)
+- Agent SDK v2 session management
+- Smart model routing (14-dimension scoring)
+- Per-thread heartbeat monitoring
+- Cross-thread communication
 - Activity logging
 
 Stay proactive and responsive to messages.

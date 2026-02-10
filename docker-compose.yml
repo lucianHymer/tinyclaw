@@ -1,0 +1,86 @@
+services:
+  broker:
+    build: ./broker
+    restart: always
+    volumes:
+      - ./secrets/github-app.pem:/secrets/github-app.pem:ro
+    environment:
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - BROKER_SECRET=${BROKER_SECRET}
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  bot:
+    build: .
+    restart: always
+    init: true
+    stop_grace_period: 30s
+    entrypoint: /app/entrypoint.sh
+    depends_on:
+      broker:
+        condition: service_healthy
+    volumes:
+      - ./.tinyclaw:/app/.tinyclaw
+      # Mount workspace at the same host path so threads.json cwd values work
+      - ${WORKSPACE_ROOT}:${WORKSPACE_ROOT}
+      - ./secrets/github-installations.json:/secrets/github-installations.json:ro
+      - ${CLAUDE_CREDENTIALS}:/home/node/.claude/.credentials.json
+    environment:
+      - NODE_ENV=production
+      - DEFAULT_CWD=${WORKSPACE_ROOT}
+      - CREDENTIAL_BROKER_URL=http://broker:3000
+      - BROKER_SECRET=${BROKER_SECRET}
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    restart: always
+    depends_on:
+      - bot
+    volumes:
+      - ./.tinyclaw:/app/.tinyclaw:ro
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3100/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: always
+  #   command: tunnel run
+  #   environment:
+  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+  #   depends_on:
+  #     - dashboard
+  #   networks:
+  #     - internal
+
+networks:
+  internal:
+    driver: bridge

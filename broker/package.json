@@ -1,0 +1,12 @@
+{
+  "name": "tinyclaw-broker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "@octokit/auth-app": "^7.1.0"
+  }
+}
