@@ -233,6 +233,27 @@ bot.on("message:text").filter(
     },
 );
 
+// ─── Model Reaction Emoji ───
+
+// ⚡ haiku (fast), ✍ sonnet (writing), 🔥 opus (fire)
+const MODEL_REACTIONS: Record<string, string> = {
+    haiku: "⚡",
+    sonnet: "✍",
+    opus: "🔥",
+};
+
+async function reactWithModel(chatId: string | number, messageId: number, model?: string): Promise<void> {
+    if (!model) return;
+    const emoji = MODEL_REACTIONS[model];
+    if (!emoji) return;
+    try {
+        await bot.api.setMessageReaction(chatId, messageId,
+            [{ type: "emoji", emoji: emoji as any }]);
+    } catch {
+        // Reactions may not be available in all groups — silently ignore
+    }
+}
+
 // ─── Outgoing Queue Polling ───
 
 async function pollOutgoingQueue(): Promise<void> {
@@ -260,6 +281,7 @@ async function pollOutgoingQueue(): Promise<void> {
                         });
                         if (data.model) {
                             storeMessageModel(sent.message_id, data.model);
+                            await reactWithModel(chatId, sent.message_id, data.model);
                         }
                     }
 
@@ -280,6 +302,7 @@ async function pollOutgoingQueue(): Promise<void> {
                             });
                             if (data.model) {
                                 storeMessageModel(sent.message_id, data.model);
+                                await reactWithModel(pending.chatId, sent.message_id, data.model);
                             }
                         }
 
@@ -302,6 +325,7 @@ async function pollOutgoingQueue(): Promise<void> {
                             const sent = await bot.api.sendMessage(chatId, chunk);
                             if (data.model) {
                                 storeMessageModel(sent.message_id, data.model);
+                                await reactWithModel(chatId, sent.message_id, data.model);
                             }
                         }
                     }

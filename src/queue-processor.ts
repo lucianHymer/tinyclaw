@@ -309,7 +309,7 @@ async function getSession(
     threadId: number,
     threadConfig: ThreadConfig,
     effectiveModel: string,
-): Promise<SDKSession> {
+): Promise<{ session: SDKSession; isNew: boolean }> {
     const existing = activeSessions.get(threadId);
     const options = buildSessionOptions(threadConfig, effectiveModel);
 
@@ -329,7 +329,7 @@ async function getSession(
                 model: effectiveModel,
             });
             activeSessions.set(threadId, session);
-            return session;
+            return { session, isNew: false };
         } catch (err) {
             log("WARN", `Failed to resume session for thread ${threadId} after model change: ${toErrorMessage(err)}. Creating new session.`);
             // Fall through to create new session
@@ -338,7 +338,7 @@ async function getSession(
 
     // If we have a cached session and model didn't change, return it
     if (existing) {
-        return existing;
+        return { session: existing, isNew: false };
     }
 
     // Try to resume existing session
@@ -346,7 +346,7 @@ async function getSession(
         try {
             const session = unstable_v2_resumeSession(threadConfig.sessionId, options);
             activeSessions.set(threadId, session);
-            return session;
+            return { session, isNew: false };
         } catch (err) {
             log("WARN", `Failed to resume session ${threadConfig.sessionId} for thread ${threadId}: ${toErrorMessage(err)}. Creating new session.`);
             // Clear stale sessionId
@@ -362,7 +362,7 @@ async function getSession(
     // Create a fresh session
     const session = unstable_v2_createSession(options);
     activeSessions.set(threadId, session);
-    return session;
+    return { session, isNew: true };
 }
 
 // ─── Process a Single Message ───
@@ -445,15 +445,21 @@ async function processMessage(messageFile: string): Promise<void> {
             // Update lastActive
             threads[key].lastActive = Date.now();
 
-            // ─── Build the full prompt with history context ───
+            // ─── Get or create session ───
+            const { session, isNew } = await getSession(threadId, threadConfig, effectiveModel);
+
+            // ─── Build the full prompt ───
+            // Only inject history context on new sessions (resumed sessions already have context)
             const now = formatCurrentTime();
             const prefix = buildSourcePrefix(msg);
-            const historyContext = buildHistoryContext(threadId, threadConfig.isMaster);
-            const contextBlock = historyContext ? `\n\n${historyContext}\n\n` : "\n\n";
-            const fullPrompt = `[${now}]${contextBlock}${prefix} ${message}`;
-
-            // ─── Get or create session ───
-            const session = await getSession(threadId, threadConfig, effectiveModel);
+            let fullPrompt: string;
+            if (isNew) {
+                const historyContext = buildHistoryContext(threadId, threadConfig.isMaster);
+                const contextBlock = historyContext ? `\n\n${historyContext}\n\n` : "\n\n";
+                fullPrompt = `[${now}]${contextBlock}${prefix} ${message}`;
+            } else {
+                fullPrompt = `[${now}] ${prefix} ${message}`;
+            }
 
             try {
                 // Send the message

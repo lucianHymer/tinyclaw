@@ -96,7 +96,7 @@ export function getRecentHistory(options: { threadId?: number; limit?: number })
 }
 
 /**
- * Build a history context string for UserPromptSubmit hook injection.
+ * Build a history context string for new session prompt injection.
  * Master threads get recent 30 entries from all threads.
  * Worker threads get recent 20 entries from their thread only.
  */
