@@ -17,6 +17,7 @@ export interface IncomingMessage {
     isReply?: boolean;
     replyToText?: string;
     replyToModel?: string;
+    topicName?: string;
     timestamp: number;
     messageId: string;
 }

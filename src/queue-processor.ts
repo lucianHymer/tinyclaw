@@ -416,13 +416,17 @@ async function processMessage(messageFile: string): Promise<void> {
             if (!threadConfig) {
                 const defaultCwd = process.env.DEFAULT_CWD || "/home/clawcian/.openclaw/workspace";
                 threadConfig = {
-                    name: `Thread ${threadId}`,
+                    name: msg.topicName ?? `Thread ${threadId}`,
                     cwd: defaultCwd,
                     model: effectiveModel,
                     isMaster: false,
                     lastActive: Date.now(),
                 };
                 threads[key] = threadConfig;
+                saveThreads(threads);
+            } else if (msg.topicName && threadConfig.name === `Thread ${threadId}`) {
+                // Backfill topic name for threads created before name tracking
+                threadConfig.name = msg.topicName;
                 saveThreads(threads);
             }
 

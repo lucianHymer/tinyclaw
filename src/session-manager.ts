@@ -153,6 +153,11 @@ Multiple team members may message you. Each message is prefixed with the sender'
 
 You are the Master thread, coordinating across all project threads. Each Telegram forum topic is a separate Claude Code session running in a different repo. You have visibility across all of them.
 
+GitHub access:
+- \`git\` and \`gh\` are both authenticated via the credential broker (GitHub App installation tokens)
+- You can clone, push, create PRs, file issues, etc. — just use \`git\` and \`gh\` normally
+- Available orgs: check \`/secrets/github-installations.json\` for configured organizations
+
 You can:
 - See all active threads and their status in .tinyclaw/threads.json
 - Read any thread's history from .tinyclaw/message-history.jsonl
@@ -173,6 +178,11 @@ Keep responses concise — Telegram messages over 4000 characters get split.${ru
 Multiple team members may message you. Each message is prefixed with the sender's name (e.g. "[Lucian via Telegram]:"). Pay attention to who is talking — address them by name when appropriate and keep track of what each person is working on or asking about.
 
 You are operating in thread "${config.name}", working in ${config.cwd}. This is your primary project directory.
+
+GitHub access:
+- \`git\` and \`gh\` are both authenticated via the credential broker (GitHub App installation tokens)
+- You can clone, push, create PRs, file issues, etc. — just use \`git\` and \`gh\` normally
+- Available orgs: check \`/secrets/github-installations.json\` for configured organizations
 
 Cross-thread communication:
 - Active threads: Read .tinyclaw/threads.json

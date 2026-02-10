@@ -88,6 +88,10 @@ function lookupMessageModel(messageId: number): string | undefined {
     return models[String(messageId)];
 }
 
+// ─── Topic Name Cache ───
+
+const topicNames = new Map<number, string>();
+
 // ─── Pending Messages ───
 
 interface PendingMessage {
@@ -131,6 +135,27 @@ const settings = loadSettings();
 const bot = new Bot<Context>(settings.telegram_bot_token);
 
 bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 60 }));
+
+// ─── Topic Name Tracking ───
+
+bot.on("message:forum_topic_created", (ctx) => {
+    const threadId = ctx.msg.message_thread_id;
+    const name = ctx.msg.forum_topic_created.name;
+    if (threadId && name) {
+        topicNames.set(threadId, name);
+        log("INFO", `Topic name cached: thread ${threadId} = "${name}"`);
+    }
+});
+
+bot.on("message:forum_topic_edited", (ctx) => {
+    const threadId = ctx.msg.message_thread_id;
+    const name = ctx.msg.forum_topic_edited.name;
+    if (threadId && name) {
+        topicNames.set(threadId, name);
+        configureThread(threadId, { name });
+        log("INFO", `Topic name updated: thread ${threadId} = "${name}"`);
+    }
+});
 
 // ─── Commands ───
 
@@ -199,6 +224,7 @@ bot.on("message:text").filter(
         if (String(ctx.chat.id) !== settings.telegram_chat_id) return;
 
         const messageId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const topicName = topicNames.get(threadId);
         const queueData = {
             channel: "telegram",
             source: "user" as const,
@@ -209,6 +235,7 @@ bot.on("message:text").filter(
             isReply: isReplyToBot,
             replyToText,
             replyToModel,
+            topicName,
             timestamp: Date.now(),
             messageId,
         };
