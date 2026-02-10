@@ -17,6 +17,8 @@ import {
     configureThread,
 } from "./session-manager.js";
 import type { ThreadConfig, ThreadsMap, Settings } from "./session-manager.js";
+import type { OutgoingMessage } from "./types.js";
+import { toErrorMessage } from "./types.js";
 
 // ─── Context Type ───
 
@@ -51,17 +53,33 @@ function log(level: string, message: string): void {
 
 // ─── Message Model Tracking ───
 
+let messageModelsCache: Record<string, string> | null = null;
+
 function loadMessageModels(): Record<string, string> {
+    if (messageModelsCache) return messageModelsCache;
     try {
         const data = fs.readFileSync(MESSAGE_MODELS_FILE, "utf8");
-        return JSON.parse(data) as Record<string, string>;
+        messageModelsCache = JSON.parse(data) as Record<string, string>;
+        return messageModelsCache;
     } catch {
-        return {};
+        messageModelsCache = {};
+        return messageModelsCache;
     }
 }
 
 function saveMessageModels(models: Record<string, string>): void {
-    fs.writeFileSync(MESSAGE_MODELS_FILE, JSON.stringify(models, null, 2));
+    // Prune to last 1000 entries
+    const keys = Object.keys(models);
+    if (keys.length > 1000) {
+        const toRemove = keys.slice(0, keys.length - 1000);
+        for (const key of toRemove) {
+            delete models[key];
+        }
+    }
+    const tmp = MESSAGE_MODELS_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(models, null, 2));
+    fs.renameSync(tmp, MESSAGE_MODELS_FILE);
+    messageModelsCache = models;
 }
 
 function storeMessageModel(messageId: number, model: string): void {
@@ -122,6 +140,7 @@ bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 60 }));
 // ─── Commands ───
 
 bot.command("reset", async (ctx) => {
+    if (String(ctx.chat?.id) !== settings.telegram_chat_id) return;
     const threadId = ctx.msg.message_thread_id ?? 1;
     resetThread(threadId);
     await ctx.reply("Session reset! Starting fresh.", {
@@ -131,6 +150,7 @@ bot.command("reset", async (ctx) => {
 });
 
 bot.command("setdir", async (ctx) => {
+    if (String(ctx.chat?.id) !== settings.telegram_chat_id) return;
     const threadId = ctx.msg.message_thread_id ?? 1;
     const dir = ctx.match?.trim();
 
@@ -149,6 +169,7 @@ bot.command("setdir", async (ctx) => {
 });
 
 bot.command("status", async (ctx) => {
+    if (String(ctx.chat?.id) !== settings.telegram_chat_id) return;
     const threads = loadThreads();
     const lines: string[] = ["Active threads:"];
 
@@ -199,10 +220,10 @@ bot.on("message:text").filter(
             messageId,
         };
 
-        fs.writeFileSync(
-            path.join(QUEUE_INCOMING, `telegram_${messageId}.json`),
-            JSON.stringify(queueData, null, 2),
-        );
+        const queueFile = path.join(QUEUE_INCOMING, `telegram_${messageId}.json`);
+        const tmpFile = queueFile + ".tmp";
+        fs.writeFileSync(tmpFile, JSON.stringify(queueData, null, 2));
+        fs.renameSync(tmpFile, queueFile);
 
         pendingMessages.set(messageId, { ctx, chatId: ctx.chat.id, threadId });
         log(
@@ -213,17 +234,6 @@ bot.on("message:text").filter(
 );
 
 // ─── Outgoing Queue Polling ───
-
-interface OutgoingMessage {
-    channel: string;
-    sender: string;
-    message: string;
-    originalMessage: string;
-    timestamp: number;
-    messageId: string;
-    model?: string;
-    targetThreadId?: number;
-}
 
 async function pollOutgoingQueue(): Promise<void> {
     try {
@@ -300,11 +310,11 @@ async function pollOutgoingQueue(): Promise<void> {
                 // Delete the queue file after processing
                 fs.unlinkSync(filePath);
             } catch (err) {
-                log("ERROR", `Failed to process outgoing file ${file}: ${(err as Error).message}`);
+                log("ERROR", `Failed to process outgoing file ${file}: ${toErrorMessage(err)}`);
             }
         }
     } catch (err) {
-        log("ERROR", `Outgoing queue poll error: ${(err as Error).message}`);
+        log("ERROR", `Outgoing queue poll error: ${toErrorMessage(err)}`);
     }
 }
 

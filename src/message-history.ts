@@ -59,23 +59,40 @@ export function getRecentHistory(options: { threadId?: number; limit?: number })
         return [];
     }
 
-    const content = fs.readFileSync(HISTORY_FILE, "utf8");
-    const lines = content.split("\n").filter(line => line.trim() !== "");
+    // Read only the last 64KB instead of the entire file
+    const TAIL_BYTES = 64 * 1024;
+    const stat = fs.statSync(HISTORY_FILE);
+    const readStart = Math.max(0, stat.size - TAIL_BYTES);
 
-    let entries: MessageHistoryEntry[] = [];
-    for (const line of lines) {
-        try {
-            entries.push(JSON.parse(line) as MessageHistoryEntry);
-        } catch {
-            // Skip malformed lines
+    const fd = fs.openSync(HISTORY_FILE, "r");
+    try {
+        const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
+        fs.readSync(fd, buf, 0, buf.length, readStart);
+        const content = buf.toString("utf8");
+
+        // If we started mid-file, skip the first (potentially partial) line
+        const lines = content.split("\n").filter(line => line.trim() !== "");
+        if (readStart > 0 && lines.length > 0) {
+            lines.shift();
         }
-    }
 
-    if (options.threadId !== undefined) {
-        entries = entries.filter(e => e.threadId === options.threadId);
-    }
+        let entries: MessageHistoryEntry[] = [];
+        for (const line of lines) {
+            try {
+                entries.push(JSON.parse(line) as MessageHistoryEntry);
+            } catch {
+                // Skip malformed lines
+            }
+        }
 
-    return entries.slice(-limit);
+        if (options.threadId !== undefined) {
+            entries = entries.filter(e => e.threadId === options.threadId);
+        }
+
+        return entries.slice(-limit);
+    } finally {
+        fs.closeSync(fd);
+    }
 }
 
 /**

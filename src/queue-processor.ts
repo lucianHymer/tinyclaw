@@ -23,7 +23,9 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { route, DEFAULT_ROUTING_CONFIG, maxTier } from "./router/index.js";
 import type { Tier, RoutingDecision } from "./router/index.js";
-import { logDecision, expandPath } from "./routing-logger.js";
+import { logDecision } from "./routing-logger.js";
+import { toErrorMessage } from "./types.js";
+import type { IncomingMessage, OutgoingMessage } from "./types.js";
 import {
     appendHistory,
     getRecentHistory,
@@ -35,6 +37,8 @@ import {
     loadThreads,
     saveThreads,
     loadSettings,
+    resetThread,
+    configureThread,
     canUseTool as sessionCanUseTool,
     buildThreadPrompt,
     buildHeartbeatPrompt,
@@ -50,47 +54,19 @@ const QUEUE_INCOMING = path.join(TINYCLAW_DIR, "queue/incoming");
 const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
 const QUEUE_PROCESSING = path.join(TINYCLAW_DIR, "queue/processing");
 const QUEUE_DEAD_LETTER = path.join(TINYCLAW_DIR, "queue/dead-letter");
+const QUEUE_COMMANDS = path.join(TINYCLAW_DIR, "queue/commands");
 const LOG_FILE = path.join(TINYCLAW_DIR, "logs/queue.log");
 const ROUTING_LOG = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
 
 // ─── Ensure queue directories exist ───
 
-[QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING, QUEUE_DEAD_LETTER, path.dirname(LOG_FILE)].forEach(
+[QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING, QUEUE_DEAD_LETTER, QUEUE_COMMANDS, path.dirname(LOG_FILE)].forEach(
     (dir) => {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
     },
 );
-
-// ─── Types ───
-
-interface IncomingMessage {
-    channel: string;
-    source?: MessageSource;
-    threadId: number;
-    sourceThreadId?: number;
-    sender: string;
-    senderId?: string;
-    message: string;
-    isReply?: boolean;
-    replyToText?: string;
-    replyToModel?: string;
-    timestamp: number;
-    messageId: string;
-}
-
-interface OutgoingMessage {
-    channel: string;
-    threadId: number;
-    sender: string;
-    message: string;
-    originalMessage: string;
-    timestamp: number;
-    messageId: string;
-    model: string;
-    targetThreadId?: number;
-}
 
 // ─── Tier / Model Mapping ───
 
@@ -199,14 +175,16 @@ function buildSessionOptions(
     threadConfig: ThreadConfig,
     effectiveModel: string,
 ): SDKSessionOptions {
+    // permissionMode and allowDangerouslySkipPermissions are passed through
+    // to the SDK but may not be in the SDKSessionOptions type definition yet.
     return {
         model: effectiveModel,
         cwd: threadConfig.cwd,
         canUseTool: sdkCanUseTool,
-        settingSources: ["project"] as const,
+        settingSources: ["project"],
         systemPrompt: {
-            type: "preset" as const,
-            preset: "claude_code" as const,
+            type: "preset",
+            preset: "claude_code",
             append: buildThreadPrompt(threadConfig),
         },
         permissionMode: "bypassPermissions",
@@ -271,10 +249,10 @@ async function processHeartbeat(msg: IncomingMessage): Promise<string> {
         model: "haiku",
         cwd: threadConfig.cwd,
         canUseTool: sdkCanUseTool,
-        settingSources: ["project"] as const,
+        settingSources: ["project"],
         systemPrompt: {
-            type: "preset" as const,
-            preset: "claude_code" as const,
+            type: "preset",
+            preset: "claude_code",
             append: buildThreadPrompt(threadConfig),
         },
         permissionMode: "bypassPermissions",
@@ -353,7 +331,7 @@ async function getSession(
             activeSessions.set(threadId, session);
             return session;
         } catch (err) {
-            log("WARN", `Failed to resume session for thread ${threadId} after model change: ${(err as Error).message}. Creating new session.`);
+            log("WARN", `Failed to resume session for thread ${threadId} after model change: ${toErrorMessage(err)}. Creating new session.`);
             // Fall through to create new session
         }
     }
@@ -370,7 +348,7 @@ async function getSession(
             activeSessions.set(threadId, session);
             return session;
         } catch (err) {
-            log("WARN", `Failed to resume session ${threadConfig.sessionId} for thread ${threadId}: ${(err as Error).message}. Creating new session.`);
+            log("WARN", `Failed to resume session ${threadConfig.sessionId} for thread ${threadId}: ${toErrorMessage(err)}. Creating new session.`);
             // Clear stale sessionId
             const threads = loadThreads();
             const key = String(threadId);
@@ -398,7 +376,7 @@ async function processMessage(messageFile: string): Promise<void> {
         // Move to processing
         fs.renameSync(messageFile, processingFile);
     } catch (err) {
-        log("ERROR", `Failed to move ${filename} to processing: ${(err as Error).message}`);
+        log("ERROR", `Failed to move ${filename} to processing: ${toErrorMessage(err)}`);
         return;
     }
 
@@ -406,7 +384,7 @@ async function processMessage(messageFile: string): Promise<void> {
     try {
         msg = JSON.parse(fs.readFileSync(processingFile, "utf8")) as IncomingMessage;
     } catch (err) {
-        log("ERROR", `Failed to parse ${filename}: ${(err as Error).message}`);
+        log("ERROR", `Failed to parse ${filename}: ${toErrorMessage(err)}`);
         moveToDeadLetter(processingFile, filename);
         return;
     }
@@ -498,7 +476,7 @@ async function processMessage(messageFile: string): Promise<void> {
                 }
             } catch (sessionErr) {
                 // Session error: close and remove from cache, let retry handle it
-                log("ERROR", `Session error for thread ${threadId}: ${(sessionErr as Error).message}`);
+                log("ERROR", `Session error for thread ${threadId}: ${toErrorMessage(sessionErr)}`);
                 try {
                     const cached = activeSessions.get(threadId);
                     if (cached) {
@@ -572,7 +550,7 @@ async function processMessage(messageFile: string): Promise<void> {
             fs.unlinkSync(processingFile);
         }
     } catch (error) {
-        log("ERROR", `Processing error for ${filename}: ${(error as Error).message}`);
+        log("ERROR", `Processing error for ${filename}: ${toErrorMessage(error)}`);
         handleRetry(processingFile, filename, retryCount);
     }
 }
@@ -597,7 +575,7 @@ function handleRetry(processingFile: string, filename: string, retryCount: numbe
         fs.renameSync(processingFile, retryPath);
         log("WARN", `Retry ${newRetry}/${MAX_RETRIES} for ${filename} -> ${retryFilename}`);
     } catch (err) {
-        log("ERROR", `Failed to move ${filename} back for retry: ${(err as Error).message}`);
+        log("ERROR", `Failed to move ${filename} back for retry: ${toErrorMessage(err)}`);
         moveToDeadLetter(processingFile, filename);
     }
 }
@@ -608,12 +586,52 @@ function moveToDeadLetter(filePath: string, filename: string): void {
         fs.renameSync(filePath, deadLetterPath);
         log("ERROR", `Moved to dead-letter: ${filename}`);
     } catch (err) {
-        log("ERROR", `Failed to move ${filename} to dead-letter: ${(err as Error).message}`);
+        log("ERROR", `Failed to move ${filename} to dead-letter: ${toErrorMessage(err)}`);
         // Last resort: just delete the processing file so it doesn't block the queue
         try {
             fs.unlinkSync(filePath);
         } catch {
             // Nothing more we can do
+        }
+    }
+}
+
+// ─── Command Queue Processing ───
+
+async function processCommands(): Promise<void> {
+    if (!fs.existsSync(QUEUE_COMMANDS)) return;
+
+    const files = fs.readdirSync(QUEUE_COMMANDS).filter(f => f.endsWith(".json"));
+
+    for (const file of files) {
+        const filePath = path.join(QUEUE_COMMANDS, file);
+        try {
+            const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+                command: string;
+                threadId: number;
+                args?: Record<string, string>;
+                timestamp: number;
+            };
+
+            if (data.command === "reset") {
+                resetThread(data.threadId);
+                const cached = activeSessions.get(data.threadId);
+                if (cached) {
+                    try { cached.close(); } catch { /* ignore */ }
+                    activeSessions.delete(data.threadId);
+                }
+                log("INFO", `Command: reset thread ${data.threadId}`);
+            } else if (data.command === "setdir" && data.args?.cwd) {
+                configureThread(data.threadId, { cwd: data.args.cwd });
+                log("INFO", `Command: setdir thread ${data.threadId} -> ${data.args.cwd}`);
+            } else {
+                log("WARN", `Unknown command: ${data.command}`);
+            }
+
+            fs.unlinkSync(filePath);
+        } catch (err) {
+            log("ERROR", `Failed to process command ${file}: ${toErrorMessage(err)}`);
+            try { fs.unlinkSync(filePath); } catch { /* ignore */ }
         }
     }
 }
@@ -631,6 +649,8 @@ async function processQueue(): Promise<void> {
     processing = true;
 
     try {
+        await processCommands();
+
         const files: QueueFile[] = fs
             .readdirSync(QUEUE_INCOMING)
             .filter((f) => f.endsWith(".json"))
@@ -650,7 +670,7 @@ async function processQueue(): Promise<void> {
             await processMessage(file.path);
         }
     } catch (error) {
-        log("ERROR", `Queue scan error: ${(error as Error).message}`);
+        log("ERROR", `Queue scan error: ${toErrorMessage(error)}`);
     } finally {
         processing = false;
     }
@@ -681,7 +701,7 @@ async function shutdown(signal: string): Promise<void> {
             log("INFO", `Closing session for thread ${threadId}`);
             session.close();
         } catch (err) {
-            log("WARN", `Error closing session for thread ${threadId}: ${(err as Error).message}`);
+            log("WARN", `Error closing session for thread ${threadId}: ${toErrorMessage(err)}`);
         }
     }
     activeSessions.clear();
@@ -720,7 +740,7 @@ try {
     });
     log("INFO", "fs.watch active on incoming queue");
 } catch (err) {
-    log("WARN", `fs.watch unavailable: ${(err as Error).message}. Using interval fallback only.`);
+    log("WARN", `fs.watch unavailable: ${toErrorMessage(err)}. Using interval fallback only.`);
 }
 
 // 5-second fallback interval

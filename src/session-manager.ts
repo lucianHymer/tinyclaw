@@ -42,18 +42,21 @@ const SETTINGS_FILE = path.join(SCRIPT_DIR, ".tinyclaw/settings.json");
 export const MAX_CONCURRENT_SESSIONS = 10;
 export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-// ─── Active session tracking ───
+// ─── In-memory caches ───
 
-const activeSessions = new Map<number, unknown>();
+let threadsCache: ThreadsMap | null = null;
+let settingsCache: Settings | null = null;
 
 // ─── Thread Persistence ───
 
 export function loadThreads(): ThreadsMap {
+    if (threadsCache) return threadsCache;
     try {
         const data = fs.readFileSync(THREADS_FILE, "utf8");
-        return JSON.parse(data) as ThreadsMap;
+        threadsCache = JSON.parse(data) as ThreadsMap;
+        return threadsCache;
     } catch {
-        return {
+        threadsCache = {
             "1": {
                 name: "Master",
                 cwd: "/home/clawcian/.openclaw/workspace",
@@ -62,6 +65,7 @@ export function loadThreads(): ThreadsMap {
                 lastActive: 0,
             },
         };
+        return threadsCache;
     }
 }
 
@@ -70,15 +74,16 @@ export function saveThreads(threads: ThreadsMap): void {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
-
     const tmp = THREADS_FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(threads, null, 2));
     fs.renameSync(tmp, THREADS_FILE);
+    threadsCache = threads;
 }
 
 // ─── Settings ───
 
 export function loadSettings(): Settings {
+    if (settingsCache) return settingsCache;
     const defaults: Settings = {
         timezone: "UTC",
         telegram_bot_token: "",
@@ -91,9 +96,11 @@ export function loadSettings(): Settings {
     try {
         const data = fs.readFileSync(SETTINGS_FILE, "utf8");
         const parsed = JSON.parse(data) as Partial<Settings>;
-        return { ...defaults, ...parsed };
+        settingsCache = { ...defaults, ...parsed };
+        return settingsCache;
     } catch {
-        return defaults;
+        settingsCache = defaults;
+        return settingsCache;
     }
 }
 
@@ -117,7 +124,17 @@ export const canUseTool: CanUseTool = async (toolName, input) => {
 
 // ─── System Prompts ───
 
-export function buildThreadPrompt(config: ThreadConfig): string {
+export function buildThreadPrompt(config: ThreadConfig, runtime?: { threadId?: number; model?: string }): string {
+    const runtimeBlock = `
+
+Your runtime context:
+- Thread ID: ${runtime?.threadId ?? "unknown"}
+- Model: ${runtime?.model ?? config.model}
+- Outgoing message format: {"channel": "...", "threadId": N, "message": "...", "targetThreadId": N, ...}
+- Message history log: .tinyclaw/message-history.jsonl
+- Routing log: .tinyclaw/logs/routing.jsonl
+- Response truncation limit: 4000 characters`;
+
     if (config.isMaster) {
         return `You are TinyClaw Master, the coordination thread. You have visibility across all projects.
 
@@ -126,10 +143,12 @@ You can:
 - Read any thread's history from .tinyclaw/message-history.jsonl
 - Message any thread by writing to .tinyclaw/queue/outgoing/ with targetThreadId
 - Broadcast to all threads by writing multiple outgoing messages
+- Reset a thread: Write {"command": "reset", "threadId": N, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/
+- Change working directory: Write {"command": "setdir", "threadId": N, "args": {"cwd": "/path"}, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/
 
 You receive periodic heartbeat messages. Read HEARTBEAT.md in your working directory
 and follow it. You can edit HEARTBEAT.md to maintain your own task list. Reply
-HEARTBEAT_OK if nothing needs attention.`;
+HEARTBEAT_OK if nothing needs attention.${runtimeBlock}`;
     }
 
     return `You are TinyClaw, operating in thread "${config.name}" (${config.cwd}).
@@ -139,10 +158,12 @@ Cross-thread communication:
 - Other threads' history: Grep .tinyclaw/message-history.jsonl for their threadId
 - Message another thread: Write JSON to .tinyclaw/queue/outgoing/ with targetThreadId field
 - If you lose context after compaction: tail .tinyclaw/message-history.jsonl for your threadId
+- Reset a thread: Write {"command": "reset", "threadId": N, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/
+- Change working directory: Write {"command": "setdir", "threadId": N, "args": {"cwd": "/path"}, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/
 
 You receive periodic heartbeat messages. Read HEARTBEAT.md in your working directory
 and follow it. You can edit HEARTBEAT.md to maintain your own task list. Reply
-HEARTBEAT_OK if nothing needs attention.`;
+HEARTBEAT_OK if nothing needs attention.${runtimeBlock}`;
 }
 
 export function buildHeartbeatPrompt(config: ThreadConfig): string {
@@ -170,26 +191,26 @@ export function resetThread(threadId: number): void {
 export function configureThread(threadId: number, updates: Partial<ThreadConfig>): void {
     const threads = loadThreads();
     const key = String(threadId);
+    // Filter out undefined values from updates
+    const filtered = Object.fromEntries(
+        Object.entries(updates).filter(([, v]) => v !== undefined)
+    ) as Partial<ThreadConfig>;
+
     if (threads[key]) {
-        threads[key] = { ...threads[key], ...updates };
+        threads[key] = { ...threads[key], ...filtered };
     } else {
         threads[key] = {
-            name: updates.name ?? `Thread ${threadId}`,
-            cwd: updates.cwd ?? "/home/clawcian/.openclaw/workspace",
-            model: updates.model ?? "sonnet",
-            isMaster: updates.isMaster ?? false,
-            lastActive: updates.lastActive ?? Date.now(),
-            ...updates,
+            name: filtered.name ?? `Thread ${threadId}`,
+            cwd: filtered.cwd ?? "/home/clawcian/.openclaw/workspace",
+            model: filtered.model ?? "sonnet",
+            isMaster: filtered.isMaster ?? false,
+            lastActive: filtered.lastActive ?? Date.now(),
         };
     }
     saveThreads(threads);
 }
 
 // ─── Session Tracking ───
-
-export function getActiveSessionCount(): number {
-    return activeSessions.size;
-}
 
 export function cleanupIdleSessions(sessions: Map<number, unknown>): number[] {
     const threads = loadThreads();

@@ -55,19 +55,18 @@ while true; do
     for THREAD_ID in $THREAD_IDS; do
         MESSAGE_ID="heartbeat_${THREAD_ID}_$(date +%s)_$$"
 
-        cat > "$QUEUE_INCOMING/${MESSAGE_ID}.json" << EOF
-{
-  "channel": "heartbeat",
-  "source": "heartbeat",
-  "threadId": $THREAD_ID,
-  "sender": "system",
-  "senderId": "heartbeat",
-  "message": "$HEARTBEAT_PROMPT",
-  "isReply": false,
-  "timestamp": $EPOCH_MS,
-  "messageId": "$MESSAGE_ID"
-}
-EOF
+        jq -n \
+          --arg channel "heartbeat" \
+          --arg source "heartbeat" \
+          --argjson threadId "$THREAD_ID" \
+          --arg sender "system" \
+          --arg senderId "heartbeat" \
+          --arg message "$HEARTBEAT_PROMPT" \
+          --argjson isReply false \
+          --argjson timestamp "$EPOCH_MS" \
+          --arg messageId "$MESSAGE_ID" \
+          '{channel: $channel, source: $source, threadId: $threadId, sender: $sender, senderId: $senderId, message: $message, isReply: $isReply, timestamp: $timestamp, messageId: $messageId}' \
+          > "$QUEUE_INCOMING/${MESSAGE_ID}.json"
 
         log "Heartbeat queued for thread $THREAD_ID: $MESSAGE_ID"
         THREAD_COUNT=$((THREAD_COUNT + 1))

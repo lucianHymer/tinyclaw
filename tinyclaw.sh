@@ -145,19 +145,18 @@ send_message() {
 
     local MESSAGE_ID="cli_$(date +%s)_$$"
 
-    cat > "$QUEUE_INCOMING/${MESSAGE_ID}.json" << EOF
-{
-  "channel": "telegram",
-  "source": "cli",
-  "threadId": 1,
-  "sender": "CLI",
-  "senderId": "cli",
-  "message": "$message",
-  "isReply": false,
-  "timestamp": $(date +%s)000,
-  "messageId": "$MESSAGE_ID"
-}
-EOF
+    jq -n \
+      --arg channel "telegram" \
+      --arg source "cli" \
+      --argjson threadId 1 \
+      --arg sender "CLI" \
+      --arg senderId "cli" \
+      --arg message "$message" \
+      --argjson isReply false \
+      --argjson timestamp "$(date +%s)000" \
+      --arg messageId "$MESSAGE_ID" \
+      '{channel: $channel, source: $source, threadId: $threadId, sender: $sender, senderId: $senderId, message: $message, isReply: $isReply, timestamp: $timestamp, messageId: $messageId}' \
+      > "$QUEUE_INCOMING/${MESSAGE_ID}.json"
 
     echo -e "${GREEN}Message queued: $MESSAGE_ID${NC}"
     log "[cli] Queued: ${message:0:50}..."
