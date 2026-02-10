@@ -431,4 +431,13 @@ setInterval(sendTypingForPending, 4000);
 // Clean up stale pending messages every 60 seconds
 setInterval(cleanupPendingMessages, 60_000);
 
-bot.start({ onStart: () => log("INFO", "TinyClaw Telegram bot started") });
+bot.start({
+    onStart: async () => {
+        await bot.api.setMyCommands([
+            { command: "reset", description: "Reset the current thread session" },
+            { command: "setdir", description: "Set working directory for this thread" },
+            { command: "status", description: "Show all active threads and their status" },
+        ]);
+        log("INFO", "TinyClaw Telegram bot started");
+    },
+});
