@@ -52,7 +52,8 @@ let settingsMtime: number = 0;
 // ─── Thread Persistence ───
 
 export function loadThreads(): ThreadsMap {
-    if (threadsCache) return threadsCache;
+    // Always read from disk — two processes (telegram-client, queue-processor)
+    // share this file, so an in-memory cache causes cross-process staleness.
     try {
         const data = fs.readFileSync(THREADS_FILE, "utf8");
         threadsCache = JSON.parse(data) as ThreadsMap;
