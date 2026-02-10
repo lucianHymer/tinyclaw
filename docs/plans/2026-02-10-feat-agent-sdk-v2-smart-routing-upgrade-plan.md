@@ -959,7 +959,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 
 ### Message History
 - [x] All messages (in/out, all threads) appended to `.tinyclaw/message-history.jsonl`
-- [ ] `UserPromptSubmit` hook injects same-thread history for workers, all-thread history for master
+- [x] `UserPromptSubmit` hook injects same-thread history for workers, all-thread history for master
 - [x] System prompt includes compaction recovery instructions
 - [x] Agent can search older history via Grep/Bash on the JSONL file
 

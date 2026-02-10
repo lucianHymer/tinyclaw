@@ -28,6 +28,7 @@ import {
     appendHistory,
     getRecentHistory,
     buildEnrichedPrompt,
+    buildHistoryContext,
 } from "./message-history.js";
 import type { MessageSource, MessageHistoryEntry } from "./message-history.js";
 import {
@@ -466,10 +467,12 @@ async function processMessage(messageFile: string): Promise<void> {
             // Update lastActive
             threads[key].lastActive = Date.now();
 
-            // ─── Build the full prompt ───
+            // ─── Build the full prompt with history context ───
             const now = formatCurrentTime();
             const prefix = buildSourcePrefix(msg);
-            const fullPrompt = `[${now}] ${prefix} ${message}`;
+            const historyContext = buildHistoryContext(threadId, threadConfig.isMaster);
+            const contextBlock = historyContext ? `\n\n${historyContext}\n\n` : "\n\n";
+            const fullPrompt = `[${now}]${contextBlock}${prefix} ${message}`;
 
             // ─── Get or create session ───
             const session = await getSession(threadId, threadConfig, effectiveModel);
