@@ -1,533 +1,323 @@
-# TinyClaw 🦞
+# TinyClaw
 
-Minimal multi-channel AI assistant with Discord and WhatsApp integration.
+Multi-session Claude agent orchestrated through a Telegram forum, powered by the Anthropic Agent SDK v2 and smart model routing.
 
-## 🎯 What is TinyClaw?
+## What is TinyClaw?
 
-TinyClaw is a lightweight wrapper around [Claude Code](https://claude.com/claude-code) that:
+TinyClaw turns a single Telegram group into a multi-repo AI development environment. The idea is simple:
 
-- ✅ Connects Discord (via bot token) and WhatsApp (via QR code)
-- ✅ Processes messages sequentially (no race conditions)
-- ✅ Maintains conversation context
-- ✅ Runs 24/7 in tmux
-- ✅ Multi-channel ready (Telegram, Slack, etc.)
+1. Set up a machine in the cloud (VPS, dedicated server, etc.)
+2. Clone all of your team's repositories onto it
+3. Create a Telegram supergroup with Topics enabled (a "forum")
+4. Each topic in that forum becomes an independent Claude Code session running in a specific repo
+5. All sessions can communicate with each other through a shared message history and cross-thread queue
+6. A heartbeat loop keeps each session proactive -- checking for tasks, running tests, monitoring for issues
 
-**Key innovation:** File-based queue system prevents race conditions and enables seamless multi-channel support.
-
-## 📐 Architecture
+Each topic is a full Claude Code agent (via the [Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)) with file access, code editing, terminal commands, and web search. Messages are automatically routed to the right model (haiku, sonnet, or opus) based on complexity. Sessions persist across messages so context is never lost.
 
 ```
-┌─────────────────┐
-│  Discord        │──┐
-│  Client         │  │
-└─────────────────┘  │
-                     │
-┌─────────────────┐  │
-│  WhatsApp       │──┤
-│  Client         │  │
-└─────────────────┘  ├──→ Queue (incoming/)
-                     │        ↓
-┌─────────────────┐  │   ┌──────────────┐
-│  Other Channels │──┤   │   Queue      │
-│  (future)       │  │   │  Processor   │
-└─────────────────┘  │   └──────────────┘
-                     │        ↓
-                     │   claude -c -p
-                     │        ↓
-                     │   Queue (outgoing/)
-                     │        ↓
-                     └──> Channels send
-                          responses
+Telegram Forum Group
+├── General (Master)     → ~/.openclaw/workspace/          (coordinates all threads)
+├── Passport             → ~/.openclaw/workspace/passport  (Claude session in passport repo)
+├── API Server           → ~/.openclaw/workspace/api       (Claude session in api repo)
+├── Frontend             → ~/.openclaw/workspace/frontend  (Claude session in frontend repo)
+└── ...                  → each topic = its own agent session in a repo
 ```
 
-## 🚀 Quick Start
+## Architecture
 
-### Prerequisites
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                     Telegram Forum Group                         │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
+│  │ General  │ │ Repo A   │ │ Repo B   │ │ Repo C   │  ...      │
+│  │ (Master) │ │ (Worker) │ │ (Worker) │ │ (Worker) │           │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘           │
+└───────┼─────────────┼────────────┼─────────────┼────────────────┘
+        │             │            │             │
+        └─────────────┴────────────┴─────────────┘
+                          │
+                   ┌──────┴──────┐
+                   │  Telegram   │  grammY bot (I/O only)
+                   │   Client    │  tags messages with threadId
+                   └──────┬──────┘
+                          │
+                   File-based Queue
+                  incoming/ → processing/ → outgoing/
+                          │
+                   ┌──────┴──────┐
+                   │   Queue     │  Agent SDK v2 sessions
+                   │  Processor  │  smart routing, history injection
+                   └──────┬──────┘
+                          │
+              ┌───────────┼───────────┐
+              │           │           │
+        ┌─────┴─────┐ ┌──┴───┐ ┌────┴────┐
+        │  Session   │ │Router│ │ Message │
+        │  Manager   │ │ (14d)│ │ History │
+        │            │ │      │ │ (JSONL) │
+        └────────────┘ └──────┘ └─────────┘
+```
 
-- macOS or Linux
+**Key components:**
+
+- **Telegram Client** (`src/telegram-client.ts`) -- grammY bot handling all forum topics, pure I/O
+- **Queue Processor** (`src/queue-processor.ts`) -- Agent SDK v2 sessions, routing, history injection
+- **Session Manager** (`src/session-manager.ts`) -- threadId-to-session lifecycle, threads.json
+- **Smart Router** (`src/router/`) -- 14-dimension weighted scoring engine for model selection
+- **Message History** (`src/message-history.ts`) -- shared JSONL log tagged by threadId
+- **Routing Logger** (`src/routing-logger.ts`) -- JSONL audit trail of routing decisions
+
+## How It Works
+
+### Smart Model Routing
+
+Every message is scored across 14 weighted dimensions (code presence, reasoning markers, token count, technical terms, multi-step patterns, and more) to classify it as:
+
+| Tier | Model | When |
+|---|---|---|
+| SIMPLE | Haiku | Quick questions, simple lookups, status checks |
+| MEDIUM | Sonnet | Code review, moderate analysis, standard tasks |
+| COMPLEX | Opus | Architecture decisions, complex debugging, multi-step reasoning |
+
+Replies to bot messages can only **upgrade** the model (never downgrade). Fresh messages allow free model selection. Heartbeats always use haiku.
+
+The router runs locally in <1ms with zero API calls. Adapted from [ClawRouter](https://github.com/BlockRunAI/ClawRouter).
+
+### Cross-Thread Communication
+
+All sessions share visibility through:
+
+- **Shared JSONL history** -- any session can grep `.tinyclaw/message-history.jsonl` for any thread's messages
+- **threads.json** -- all sessions can read the active thread list and their configurations
+- **Queue-to-queue messaging** -- write JSON to `.tinyclaw/queue/outgoing/` with a `targetThreadId` field to message another thread
+
+The Master thread (General topic, threadId 1) has elevated visibility: it receives history from all threads and can coordinate across sessions.
+
+### Heartbeat Loop
+
+Each active thread gets periodic heartbeat check-ins via `heartbeat-cron.sh`. The heartbeat:
+- Reads `HEARTBEAT.md` in the thread's working directory (a living task list)
+- Takes action on pending tasks, runs checks, reports status
+- Uses haiku (cheapest model) and bypasses the router
+- Filters `HEARTBEAT_OK` responses to avoid cluttering Telegram
+
+## Prerequisites
+
+- Linux (tested on Debian/Ubuntu; macOS should work)
+- [Node.js 22+](https://nodejs.org/) (v22.22.0 recommended for `require(esm)` support)
 - [Claude Code](https://claude.com/claude-code) installed
-- Node.js v14+
+- An [Anthropic API key](https://console.anthropic.com/) (set as `ANTHROPIC_API_KEY`)
 - tmux
+- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
+- A Telegram supergroup with Topics enabled
 
-### Installation
+## Quick Start
 
 ```bash
-cd /path/to/tinyclaw
+# Clone the repo
+git clone https://github.com/lucianHymer/tinyclaw.git
+cd tinyclaw
 
 # Install dependencies
 npm install
 
-# Start TinyClaw (first run triggers setup wizard)
+# Build TypeScript
+npm run build
+
+# Start (first run triggers the setup wizard)
 ./tinyclaw.sh start
 ```
 
-### First Run - Setup Wizard
+### Setup Wizard
 
-On first start, you'll see an interactive setup wizard:
+On first run, you'll be prompted to configure:
 
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  TinyClaw - Setup Wizard
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- **Telegram bot token** -- from @BotFather
+- **Telegram group chat ID** -- the numeric ID of your supergroup
+- **Timezone** -- for timestamp injection (e.g., `America/Denver`)
+- **Heartbeat interval** -- seconds between check-ins (default: 500)
 
-Which messaging channel do you want to use?
+Configuration is saved to `.tinyclaw/settings.json`.
 
-  1) Discord
-  2) WhatsApp
-  3) Both
+### Creating a Telegram Forum Group
 
-Choose [1-3]: 3
+1. Create a new Telegram group
+2. Go to group settings and enable **Topics** (this turns it into a "forum")
+3. Add your bot to the group and make it an admin
+4. The "General" topic becomes the Master thread
+5. Create additional topics for each repo you want a Claude session in
 
-✓ Channel: both
+### Configuring Threads
 
-Enter your Discord bot token:
-(Get one at: https://discord.com/developers/applications)
-
-Token: YOUR_DISCORD_BOT_TOKEN_HERE
-
-✓ Discord token saved
-
-Which Claude model?
-
-  1) Sonnet  (fast, recommended)
-  2) Opus    (smartest)
-
-Choose [1-2]: 1
-
-✓ Model: sonnet
-
-Heartbeat interval (seconds)?
-(How often Claude checks in proactively)
-
-Interval [default: 500]: 500
-
-✓ Heartbeat interval: 500s
-
-✓ Configuration saved to .tinyclaw/settings.json
-```
-
-### Discord Setup
-
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application
-3. Go to "Bot" section and create a bot
-4. Copy the bot token
-5. Enable "Message Content Intent" in Bot settings
-6. Invite the bot to your server using OAuth2 URL Generator
-
-### WhatsApp Setup
-
-After starting, a QR code will appear if WhatsApp is enabled:
+Use the `/setdir` command in any topic to set its working directory:
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        WhatsApp QR Code
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-[QR CODE HERE]
-
-📱 Scan with WhatsApp:
-   Settings → Linked Devices → Link a Device
+/setdir /home/user/repos/my-project
 ```
 
-Scan it with your phone. **Done!** 🎉
+Or use `/status` to see the current configuration for a thread.
 
-### Test It
-
-**Discord:** Send a DM to your bot or mention it in a channel
-
-**WhatsApp:** Send a message to the connected number
-
-You'll get a response! 🤖
-
-## 📋 Commands
+## CLI Commands
 
 ```bash
-# Start TinyClaw
+# Start all processes (Telegram client + queue processor) in tmux
 ./tinyclaw.sh start
 
-# Run setup wizard (change channels/model/heartbeat)
-./tinyclaw.sh setup
-
-# Check status
-./tinyclaw.sh status
-
-# Send manual message
-./tinyclaw.sh send "What's the weather?"
-
-# Reset conversation
-./tinyclaw.sh reset
-
-# Reset channel authentication
-./tinyclaw.sh channels reset whatsapp  # Clear WhatsApp session
-./tinyclaw.sh channels reset discord   # Shows Discord reset instructions
-
-# Switch Claude model
-./tinyclaw.sh model           # Show current model
-./tinyclaw.sh model sonnet    # Switch to Sonnet (fast)
-./tinyclaw.sh model opus      # Switch to Opus (smartest)
-
-# View logs
-./tinyclaw.sh logs whatsapp   # WhatsApp activity
-./tinyclaw.sh logs discord    # Discord activity
-./tinyclaw.sh logs queue      # Queue processing
-./tinyclaw.sh logs heartbeat  # Heartbeat checks
-
-# Attach to tmux
-./tinyclaw.sh attach
+# Stop everything
+./tinyclaw.sh stop
 
 # Restart
 ./tinyclaw.sh restart
 
-# Stop
-./tinyclaw.sh stop
-```
+# Check status
+./tinyclaw.sh status
 
-## 🔧 Components
+# Send a message from the CLI
+./tinyclaw.sh send "Run the test suite"
 
-### 1. setup-wizard.sh
-
-- Interactive setup on first run
-- Configures channels (Discord/WhatsApp/Both)
-- Collects Discord bot token
-- Selects Claude model
-- Writes to `.tinyclaw/settings.json`
-
-### 2. discord-client.ts
-
-- Connects to Discord via bot token
-- Listens for DMs and mentions
-- Writes incoming messages to queue
-- Reads responses from queue
-- Sends replies back
-
-### 3. whatsapp-client.ts
-
-- Connects to WhatsApp via QR code
-- Writes incoming messages to queue
-- Reads responses from queue
-- Sends replies back
-
-### 4. queue-processor.ts
-
-- Polls incoming queue
-- Processes **ONE message at a time**
-- Calls `claude -c -p`
-- Writes responses to outgoing queue
-
-### 5. heartbeat-cron.sh
-
-- Runs every 5 minutes
-- Sends heartbeat via queue
-- Keeps conversation active
-
-### 6. tinyclaw.sh
-
-- Main orchestrator
-- Manages tmux session
-- CLI interface
-
-## 💬 Message Flow
-
-```
-Discord/WhatsApp message arrives
-       ↓
-Client writes to:
-  .tinyclaw/queue/incoming/{discord|whatsapp}_<id>.json
-       ↓
-queue-processor.ts picks it up
-       ↓
-Runs: claude -c -p "message"
-       ↓
-Writes to:
-  .tinyclaw/queue/outgoing/{discord|whatsapp}_<id>.json
-       ↓
-Client reads and sends response
-       ↓
-User receives reply
-```
-
-## 📁 Directory Structure
-
-```
-tinyclaw/
-├── .claude/              # Claude Code config
-│   ├── settings.json     # Hooks config
-│   └── hooks/            # Hook scripts
-├── .tinyclaw/            # TinyClaw data
-│   ├── settings.json     # Configuration (channel, model, tokens)
-│   ├── queue/
-│   │   ├── incoming/     # New messages
-│   │   ├── processing/   # Being processed
-│   │   └── outgoing/     # Responses
-│   ├── logs/
-│   │   ├── discord.log
-│   │   ├── whatsapp.log
-│   │   ├── queue.log
-│   │   └── heartbeat.log
-│   ├── channels/         # Runtime channel data
-│   ├── whatsapp-session/
-│   └── heartbeat.md
-├── src/
-│   ├── discord-client.ts    # Discord I/O
-│   ├── whatsapp-client.ts   # WhatsApp I/O
-│   └── queue-processor.ts   # Message processing
-├── dist/                 # TypeScript build output
-├── setup-wizard.sh       # Interactive setup
-├── tinyclaw.sh           # Main script
-└── heartbeat-cron.sh     # Health checks
-```
-
-## 🔄 Reset Conversation
-
-### Via CLI
-
-```bash
+# Reset conversation for next message
 ./tinyclaw.sh reset
+
+# Switch or check model
+./tinyclaw.sh model           # Show current
+./tinyclaw.sh model sonnet    # Switch to sonnet
+./tinyclaw.sh model opus      # Switch to opus
+
+# View logs
+./tinyclaw.sh logs telegram   # Telegram activity
+./tinyclaw.sh logs queue      # Queue processing
+./tinyclaw.sh logs heartbeat  # Heartbeat checks
+
+# Attach to tmux session
+./tinyclaw.sh attach
 ```
 
-### Via WhatsApp
+### Telegram Commands
 
-Send: `!reset` or `/reset`
+Send these as messages in any topic:
 
-Next message starts fresh (no conversation history).
+- `/reset` -- Reset the session for this thread (next message starts fresh)
+- `/setdir <path>` -- Set the working directory for this thread
+- `/status` -- Show thread configuration, session info, and queue state
 
-## ⚙️ Configuration
+## Configuration
 
-### Settings File
-
-All configuration is stored in `.tinyclaw/settings.json`:
+### Settings (`/.tinyclaw/settings.json`)
 
 ```json
 {
-  "channel": "both",
-  "model": "sonnet",
-  "discord_bot_token": "YOUR_TOKEN_HERE",
-  "heartbeat_interval": 500
+  "telegram_bot_token": "123456:aBcDeF...",
+  "telegram_chat_id": "-1001234567890",
+  "timezone": "America/Denver",
+  "heartbeat_interval": 500,
+  "max_concurrent_sessions": 10,
+  "session_idle_timeout_minutes": 30
 }
 ```
 
-To reconfigure, run:
-```bash
-./tinyclaw.sh setup
+### Thread Config (`.tinyclaw/threads.json`)
+
+Auto-managed. Each thread entry:
+
+```json
+{
+  "1": {
+    "name": "Master",
+    "cwd": "/home/user/.openclaw/workspace",
+    "sessionId": "abc-123",
+    "model": "sonnet",
+    "isMaster": true,
+    "lastActive": 1707580800000
+  }
+}
 ```
 
-The heartbeat interval is in seconds (default: 500s = ~8 minutes).
-This controls how often Claude proactively checks in.
-
-### Heartbeat Prompt
-
-Edit `.tinyclaw/heartbeat.md`:
-
-```markdown
-Check for:
-
-1. Pending tasks
-2. Errors
-3. Unread messages
-
-Take action if needed.
-```
-
-## 📊 Monitoring
-
-### View Logs
-
-```bash
-# WhatsApp activity
-tail -f .tinyclaw/logs/whatsapp.log
-
-# Queue processing
-tail -f .tinyclaw/logs/queue.log
-
-# Heartbeat checks
-tail -f .tinyclaw/logs/heartbeat.log
-
-# All logs
-./tinyclaw.sh logs daemon
-```
-
-### Watch Queue
-
-```bash
-# Incoming messages
-watch -n 1 'ls -lh .tinyclaw/queue/incoming/'
-
-# Outgoing responses
-watch -n 1 'ls -lh .tinyclaw/queue/outgoing/'
-```
-
-## 🎨 Features
-
-### ✅ No Race Conditions
-
-Messages processed **sequentially**, one at a time:
+## Directory Structure
 
 ```
-Message 1 → Process → Done
-Message 2 → Wait → Process → Done
-Message 3 → Wait → Process → Done
+tinyclaw/
+├── src/
+│   ├── telegram-client.ts    # Telegram I/O (grammY)
+│   ├── queue-processor.ts    # Message processing, SDK sessions, routing
+│   ├── session-manager.ts    # Thread lifecycle, system prompts, tool control
+│   ├── message-history.ts    # Shared JSONL history
+│   ├── routing-logger.ts     # Routing decision audit trail
+│   ├── types.ts              # Shared type definitions
+│   └── router/
+│       ├── index.ts          # Route entry point
+│       ├── config.ts         # 14-dimension weights, keywords, thresholds
+│       ├── rules.ts          # Weighted classifier
+│       └── types.ts          # Tier, RoutingDecision, ScoringConfig
+├── dist/                     # TypeScript build output
+├── .tinyclaw/                # Runtime data (gitignored)
+│   ├── settings.json         # Bot token, chat ID, timezone, intervals
+│   ├── threads.json          # Thread configurations
+│   ├── message-history.jsonl # All messages across all threads
+│   ├── message-models.json   # Telegram messageId -> model mapping
+│   ├── queue/
+│   │   ├── incoming/         # New messages
+│   │   ├── processing/       # Being processed
+│   │   ├── outgoing/         # Responses and cross-thread messages
+│   │   └── dead-letter/      # Failed messages (after 3 retries)
+│   └── logs/
+│       ├── telegram.log
+│       ├── queue.log
+│       ├── routing.jsonl
+│       └── heartbeat.log
+├── .claude/                  # Claude Code hooks
+│   └── hooks/
+├── docs/
+│   └── plans/                # Architecture plans
+├── tinyclaw.sh               # tmux orchestrator
+├── heartbeat-cron.sh         # Per-thread heartbeat loop
+├── setup-wizard.sh           # Interactive first-run config
+├── CLAUDE.md                 # Agent system instructions
+├── HEARTBEAT.md              # Living task list (per-repo)
+├── package.json
+└── tsconfig.json
 ```
 
-### ✅ Multi-Channel Support
-
-Discord and WhatsApp work seamlessly together. Add more channels easily:
-
-**Example: Add Telegram**
-
-```typescript
-// telegram-client.ts
-// Write to queue
-fs.writeFileSync(
-  '.tinyclaw/queue/incoming/telegram_<id>.json',
-  JSON.stringify({
-    channel: 'telegram',
-    message,
-    chatId,
-    timestamp
-  })
-);
-
-// Read responses from outgoing queue
-// Same format as Discord/WhatsApp
-```
-
-Queue processor handles all channels automatically!
-
-### ✅ Clean Responses
-
-Uses `claude -c -p`:
-
-- `-c` = continue conversation
-- `-p` = print mode (clean output)
-- No tmux capture needed
-
-### ✅ Persistent Sessions
-
-WhatsApp session persists across restarts:
-
-```bash
-# First time: Scan QR code
-./tinyclaw.sh start
-
-# Subsequent starts: Auto-connects
-./tinyclaw.sh restart
-```
-
-## 🔐 Security
-
-- WhatsApp session stored locally in `.tinyclaw/whatsapp-session/`
-- Queue files are local (no network exposure)
-- Each channel handles its own authentication
-- Claude runs with your user permissions
-
-## 🐛 Troubleshooting
-
-### WhatsApp not connecting
-
-```bash
-# Check logs
-./tinyclaw.sh logs whatsapp
-
-# Reset WhatsApp authentication
-./tinyclaw.sh channels reset whatsapp
-./tinyclaw.sh restart
-```
-
-### Discord not connecting
-
-```bash
-# Check logs
-./tinyclaw.sh logs discord
-
-# Update Discord bot token
-./tinyclaw.sh setup
-```
-
-### Messages not processing
-
-```bash
-# Check queue processor
-./tinyclaw.sh status
-
-# Check queue
-ls -la .tinyclaw/queue/incoming/
-
-# View queue logs
-./tinyclaw.sh logs queue
-```
-
-### QR code not showing
-
-```bash
-# Attach to tmux to see the QR code
-tmux attach -t tinyclaw
-```
-
-## 🚀 Production Deployment
-
-### Using systemd
-
-```bash
-sudo systemctl enable tinyclaw
-sudo systemctl start tinyclaw
-```
-
-### Using PM2
-
-```bash
-pm2 start tinyclaw.sh --name tinyclaw
-pm2 save
-```
-
-### Using supervisor
-
-```ini
-[program:tinyclaw]
-command=/path/to/tinyclaw/tinyclaw.sh start
-autostart=true
-autorestart=true
-```
-
-## 🎯 Use Cases
-
-### Personal AI Assistant
+## Message Flow
 
 ```
-You: "Remind me to call mom"
-Claude: "I'll remind you!"
-[5 minutes later via heartbeat]
-Claude: "Don't forget to call mom!"
+User sends message in Telegram topic
+       │
+       ▼
+Telegram Client tags with threadId, writes to incoming/ queue
+       │
+       ▼
+Queue Processor picks up message
+       │
+       ▼
+Smart Router scores across 14 dimensions → selects model tier
+       │
+       ▼
+Session Manager gets or creates SDK session for this thread
+       │
+       ▼
+UserPromptSubmit hook injects conversation history + timestamp
+       │
+       ▼
+Agent SDK v2 processes prompt (streaming)
+       │
+       ▼
+Response written to outgoing/ queue + appended to JSONL history
+       │
+       ▼
+Telegram Client sends response back to the correct topic
 ```
 
-### Code Helper
+## Credits
 
-```
-You: "Review my code"
-Claude: [reads files, provides feedback]
-You: "Fix the bug"
-Claude: [fixes and commits]
-```
+TinyClaw stands on the shoulders of:
 
-### Multi-Device
+- **[TinyClaw](https://github.com/lucianHymer/tinyclaw)** (original) by **Jian** -- the initial vision of a minimal AI assistant with a file-based queue architecture. The queue pattern survives in v2.
+- **[ClawRouter](https://github.com/BlockRunAI/ClawRouter)** by **BlockRunAI** -- the 14-dimension weighted scoring engine for smart model routing. Adapted under the MIT license.
+- **[OpenClaw](https://openclaw.ai/)** by **Peter Steinberger** -- inspiration for the always-on agent concept, heartbeat loop pattern, and multi-channel architecture.
+- **[Claude Code](https://claude.com/claude-code)** and the **[Anthropic Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)** -- the AI engine powering every session.
+- **[grammY](https://grammy.dev/)** -- the TypeScript-first Telegram bot framework.
 
-- WhatsApp on phone
-- Discord on desktop/mobile
-- CLI for scripts
-
-All channels share the same Claude conversation!
-
-## 🙏 Credits
-
-- Inspired by [OpenClaw](https://openclaw.ai/) by Peter Steinberger
-- Built on [Claude Code](https://claude.com/claude-code)
-- Uses [discord.js](https://discord.js.org/)
-- Uses [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js)
-
-## 📄 License
+## License
 
 MIT
-
----
-
-**TinyClaw - Small but mighty!** 🦞✨
