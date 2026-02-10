@@ -2,13 +2,15 @@
  * JSONL Logger for Routing Decisions
  *
  * Logs every routing decision for analysis.
+ * Uses sync I/O (appendFileSync) matching codebase convention.
+ * Rotates at 10MB matching message-history.ts pattern.
  */
 
-import { appendFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { createHash } from "node:crypto";
+import fs from "fs";
+import { createHash } from "crypto";
 import type { RoutingDecision, Tier } from "./router/types.js";
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export type LogEntry = {
   ts: number;
@@ -20,28 +22,9 @@ export type LogEntry = {
   signals: string[];
 };
 
-/** Track which directories we have already ensured exist. */
-const ensuredDirs = new Set<string>();
-
-/**
- * Ensure a directory exists. Synchronous on first call per dir (cold start only),
- * then cached for all subsequent calls.
- */
-function ensureDir(dirPath: string): void {
-  if (ensuredDirs.has(dirPath)) return;
-  if (!existsSync(dirPath)) {
-    // Async mkdir for cold-start — fire-and-forget, cache after success
-    mkdir(dirPath, { recursive: true, mode: 0o700 })
-      .then(() => ensuredDirs.add(dirPath))
-      .catch(() => {});
-    return;
-  }
-  ensuredDirs.add(dirPath);
-}
-
 /**
  * Log a routing decision to JSONL file.
- * Uses async fire-and-forget I/O to avoid blocking the event loop.
+ * Uses sync I/O to ensure writes are durable. Rotates at 10MB.
  */
 export function logDecision(
   decision: RoutingDecision,
@@ -49,7 +32,13 @@ export function logDecision(
   logPath: string,
 ): void {
   try {
-    ensureDir(dirname(logPath));
+    // Check file size and rotate if needed
+    if (fs.existsSync(logPath)) {
+      const stats = fs.statSync(logPath);
+      if (stats.size > MAX_FILE_SIZE) {
+        fs.renameSync(logPath, logPath.replace(".jsonl", ".1.jsonl"));
+      }
+    }
 
     // Hash prompt for privacy (full SHA-256)
     const promptHash = createHash("sha256")
@@ -66,21 +55,9 @@ export function logDecision(
       signals: decision.signals,
     };
 
-    // Fire-and-forget async write — never blocks the event loop
-    appendFile(logPath, JSON.stringify(entry) + "\n").catch(() => {});
+    const line = JSON.stringify(entry) + "\n";
+    fs.appendFileSync(logPath, line);
   } catch {
     // Silently fail — logging shouldn't break routing
   }
-}
-
-/**
- * Expand ~ to home directory.
- * Returns unexpanded path if HOME is unset.
- */
-export function expandPath(filePath: string): string {
-  const home = process.env.HOME;
-  if (home && (filePath === "~" || filePath.startsWith("~/"))) {
-    return resolve(filePath.replace("~", home));
-  }
-  return resolve(filePath);
 }

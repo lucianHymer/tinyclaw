@@ -8,20 +8,28 @@ services:
       - ./secrets/github-app.pem:/secrets/github-app.pem:ro
     environment:
       - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - BROKER_SECRET=${BROKER_SECRET}
     networks:
       - internal
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   bot:
     build: .
     restart: always
+    init: true
+    stop_grace_period: 30s
     entrypoint: /app/entrypoint.sh
     depends_on:
-      - broker
+      broker:
+        condition: service_healthy
     volumes:
       - tinyclaw-data:/app/.tinyclaw
       - ${WORKSPACE_ROOT:-/home/clawcian/.openclaw/workspace}:/workspace
@@ -31,8 +39,14 @@ services:
       - NODE_ENV=production
       - DEFAULT_CWD=/workspace
       - CREDENTIAL_BROKER_URL=http://broker:3000
+      - BROKER_SECRET=${BROKER_SECRET}
     networks:
       - internal
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
 
   dashboard:
     build:
@@ -49,10 +63,14 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/health"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3100/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   cloudflared:
     image: cloudflare/cloudflared:latest

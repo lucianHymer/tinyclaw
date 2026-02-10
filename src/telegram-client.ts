@@ -19,10 +19,6 @@ import type { ThreadConfig, ThreadsMap, Settings } from "./session-manager.js";
 import type { OutgoingMessage } from "./types.js";
 import { toErrorMessage } from "./types.js";
 
-// ─── Context Type ───
-
-type MyContext = Context;
-
 // ─── Constants ───
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
@@ -95,7 +91,7 @@ function lookupMessageModel(messageId: number): string | undefined {
 // ─── Pending Messages ───
 
 interface PendingMessage {
-    ctx: MyContext;
+    ctx: Context;
     chatId: number;
     threadId: number;
     telegramMessageId: number;
@@ -132,7 +128,7 @@ function splitMessage(text: string, maxLength = 4096): string[] {
 // ─── Bot Setup ───
 
 const settings = loadSettings();
-const bot = new Bot<MyContext>(settings.telegram_bot_token);
+const bot = new Bot<Context>(settings.telegram_bot_token);
 
 bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 60 }));
 

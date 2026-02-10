@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Git credential helper — called by git with protocol/host/path on stdin
 # Parses org from the path, looks up installation ID, calls the broker
 
@@ -21,12 +22,17 @@ if [ -z "$INSTALL_ID" ]; then
 fi
 
 # Call the credential broker
-RESULT=$(curl -sf "${CREDENTIAL_BROKER_URL:-http://broker:3000}/token?installation_id=$INSTALL_ID")
+RESULT=$(curl -sf --connect-timeout 5 --max-time 10 -H "Authorization: Bearer $BROKER_SECRET" "${CREDENTIAL_BROKER_URL:-http://broker:3000}/token?installation_id=$INSTALL_ID")
 if [ $? -ne 0 ] || [ -z "$RESULT" ]; then
+  exit 1
+fi
+
+TOKEN=$(echo "$RESULT" | jq -r '.token // empty')
+if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
 echo "protocol=https"
 echo "host=github.com"
 echo "username=x-access-token"
-echo "password=$(echo "$RESULT" | jq -r .token)"
+echo "password=$TOKEN"

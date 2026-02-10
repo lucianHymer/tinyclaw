@@ -855,16 +855,19 @@ tr.clickable { cursor: pointer; }
   }
 
   function renderOverviewStats(data) {
-    const sys = data.system || {};
+    const m = data.metrics || {};
     const container = document.getElementById('overview-stats');
-    const cpu = sys.cpuPercent || 0;
-    const ramUsed = sys.ramUsedMB || 0;
-    const ramTotal = sys.ramTotalMB || 1;
+    const cpu = m.cpu || 0;
+    const mem = m.mem || {};
+    const ramUsed = mem.usedMB || 0;
+    const ramTotal = mem.totalMB || 1;
     const ramPct = (ramUsed / ramTotal * 100);
-    const diskUsed = sys.diskUsedGB || 0;
-    const diskTotal = sys.diskTotalGB || 1;
+    const dk = m.disk || {};
+    const diskUsed = dk.usedGB || 0;
+    const diskTotal = dk.totalGB || 1;
     const diskPct = (diskUsed / diskTotal * 100);
-    const load = sys.loadAverage || [0, 0, 0];
+    const ld = m.load || {};
+    const load = [ld.load1 || 0, ld.load5 || 0, ld.load15 || 0];
 
     container.innerHTML =
       '<div class="stat-card">' +
@@ -911,23 +914,24 @@ tr.clickable { cursor: pointer; }
   }
 
   function renderOverviewThreads(data) {
-    const threads = data.threads || {};
+    const threads = data.threads || [];
     const tbody = document.getElementById('threads-tbody');
     let rows = '';
 
-    const sortedIds = Object.keys(threads).sort(function(a, b) {
-      return (threads[b].lastActive || 0) - (threads[a].lastActive || 0);
+    // threads is an array of { id, ...cfg } from /api/status
+    const sorted = threads.slice().sort(function(a, b) {
+      return (b.lastActive || 0) - (a.lastActive || 0);
     });
 
-    if (sortedIds.length === 0) {
+    if (sorted.length === 0) {
       rows = '<tr><td colspan="5" class="empty-state">No active threads</td></tr>';
     }
 
-    for (var i = 0; i < sortedIds.length; i++) {
-      var id = sortedIds[i];
-      var t = threads[id];
-      rows += '<tr class="clickable" data-thread-id="' + escapeHtml(id) + '">' +
-        '<td>' + escapeHtml(id) + '</td>' +
+    for (var i = 0; i < sorted.length; i++) {
+      var t = sorted[i];
+      var id = t.id || '';
+      rows += '<tr class="clickable" data-thread-id="' + escapeHtml(String(id)) + '">' +
+        '<td>' + escapeHtml(String(id)) + '</td>' +
         '<td>' + escapeHtml(t.name || '') + (t.isMaster ? ' <span class="badge badge-yellow">master</span>' : '') + '</td>' +
         '<td>' + modelBadge(t.model) + '</td>' +
         '<td>' + relativeTime(t.lastActive) + '</td>' +
@@ -1065,17 +1069,18 @@ tr.clickable { cursor: pointer; }
 
     document.getElementById('thread-title').textContent = 'Thread #' + threadId;
 
-    // Fetch thread info
-    var data = await api('/api/threads/' + threadId);
-    if (!data) {
+    // Fetch thread config and messages from separate endpoints
+    var threadsMap = await api('/api/threads');
+    var messages = await api('/api/threads/' + threadId + '/messages');
+    if (!threadsMap && !messages) {
       document.getElementById('thread-header-info').innerHTML =
         '<div class="empty-state">Could not load thread info</div>';
       document.getElementById('thread-chat').innerHTML = '';
       return;
     }
 
-    var config = data.config || {};
-    var messages = data.messages || [];
+    var config = (threadsMap && threadsMap[threadId]) || {};
+    messages = messages || [];
 
     // Header
     document.getElementById('thread-header-info').innerHTML =
@@ -1234,16 +1239,18 @@ tr.clickable { cursor: pointer; }
       return;
     }
 
-    var sys = data.system || data;
-    var cpu = sys.cpuPercent || 0;
-    var ramUsed = sys.ramUsedMB || 0;
-    var ramTotal = sys.ramTotalMB || 1;
+    var cpu = data.cpu || 0;
+    var mem = data.mem || {};
+    var ramUsed = mem.usedMB || 0;
+    var ramTotal = mem.totalMB || 1;
     var ramPct = ramUsed / ramTotal * 100;
-    var diskUsed = sys.diskUsedGB || 0;
-    var diskTotal = sys.diskTotalGB || 1;
+    var dk = data.disk || {};
+    var diskUsed = dk.usedGB || 0;
+    var diskTotal = dk.totalGB || 1;
     var diskPct = diskUsed / diskTotal * 100;
-    var load = sys.loadAverage || [0, 0, 0];
-    var loadPct = Math.min(load[0] / (sys.cpuCount || 4) * 100, 100);
+    var ld = data.load || {};
+    var load = [ld.load1 || 0, ld.load5 || 0, ld.load15 || 0];
+    var loadPct = Math.min(load[0] / 4 * 100, 100);
 
     var metrics = [
       { label: 'CPU', value: cpu, text: cpu.toFixed(1) + '%' },

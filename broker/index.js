@@ -8,9 +8,15 @@ const PORT = 3000;
 // Read PEM at startup
 const privateKey = fs.readFileSync("/secrets/github-app.pem", "utf8");
 const appId = process.env.GITHUB_APP_ID;
+const brokerSecret = process.env.BROKER_SECRET;
 
 if (!appId) {
   console.error("GITHUB_APP_ID is required");
+  process.exit(1);
+}
+
+if (!brokerSecret) {
+  console.error("BROKER_SECRET is required");
   process.exit(1);
 }
 
@@ -18,6 +24,12 @@ if (!appId) {
 const cache = new Map();
 
 app.get("/token", async (req, res) => {
+  // Validate Bearer token
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.slice(7) !== brokerSecret) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   const installationId = req.query.installation_id;
   if (!installationId) {
     return res.status(400).json({ error: "installation_id required" });

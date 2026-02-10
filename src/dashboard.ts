@@ -13,64 +13,11 @@ const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
 const STATIC_DIR = path.join(SCRIPT_DIR, "static");
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
 
-// ─── JSONL Tail Reader ───
-// Track byte offset per file. On each poll: read from offset to EOF, parse new lines.
-// Detect rotation: if file size < offset, reset to 0. Handle missing files gracefully.
+// ─── JSONL Readers ───
 
 interface TailState {
     offset: number;
 }
-
-const tailStates = new Map<string, TailState>();
-
-function tailJsonl<T = unknown>(filePath: string): T[] {
-    // If file doesn't exist, return empty
-    if (!fs.existsSync(filePath)) {
-        tailStates.delete(filePath);
-        return [];
-    }
-
-    const stat = fs.statSync(filePath);
-    const state = tailStates.get(filePath) || { offset: 0 };
-
-    // Detect rotation (file got smaller)
-    if (stat.size < state.offset) {
-        state.offset = 0;
-    }
-
-    // Nothing new
-    if (stat.size === state.offset) {
-        tailStates.set(filePath, state);
-        return [];
-    }
-
-    // Read new bytes
-    const fd = fs.openSync(filePath, "r");
-    try {
-        const bytesToRead = stat.size - state.offset;
-        const buf = Buffer.alloc(bytesToRead);
-        fs.readSync(fd, buf, 0, bytesToRead, state.offset);
-        state.offset = stat.size;
-        tailStates.set(filePath, state);
-
-        const content = buf.toString("utf8");
-        const lines = content.split("\n").filter(l => l.trim());
-        const entries: T[] = [];
-        for (const line of lines) {
-            try {
-                entries.push(JSON.parse(line) as T);
-            } catch {
-                // skip malformed
-            }
-        }
-        return entries;
-    } finally {
-        fs.closeSync(fd);
-    }
-}
-
-// Suppress unused function warning — tailJsonl is used by future extensions
-void tailJsonl;
 
 // Read the last N entries from a JSONL file (read from end)
 function readRecentJsonl<T = unknown>(filePath: string, n: number): T[] {
@@ -286,6 +233,13 @@ app.get("/api/threads/:id/messages", (req, res) => {
     );
     const filtered = entries.filter(e => e.threadId === threadId).slice(-limit);
     res.json(filtered);
+});
+
+// GET /api/messages/recent?n=50 — recent messages across all threads
+app.get("/api/messages/recent", (req, res) => {
+    const n = parseInt((req.query as Record<string, string>).n || "50", 10);
+    const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "message-history.jsonl"), n);
+    res.json(entries);
 });
 
 // GET /api/messages/feed — SSE stream of new messages

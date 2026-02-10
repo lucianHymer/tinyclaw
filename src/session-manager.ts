@@ -42,12 +42,12 @@ const THREADS_FILE = path.join(TINYCLAW_DIR, "threads.json");
 const SETTINGS_FILE = path.join(TINYCLAW_DIR, "settings.json");
 const DEFAULT_CWD = process.env.DEFAULT_CWD || "/home/clawcian/.openclaw/workspace";
 export const MAX_CONCURRENT_SESSIONS = 10;
-export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 // ─── In-memory caches ───
 
 let threadsCache: ThreadsMap | null = null;
 let settingsCache: Settings | null = null;
+let settingsMtime: number = 0;
 
 // ─── Thread Persistence ───
 
@@ -85,7 +85,6 @@ export function saveThreads(threads: ThreadsMap): void {
 // ─── Settings ───
 
 export function loadSettings(): Settings {
-    if (settingsCache) return settingsCache;
     const defaults: Settings = {
         timezone: "UTC",
         telegram_bot_token: "",
@@ -94,6 +93,16 @@ export function loadSettings(): Settings {
         max_concurrent_sessions: MAX_CONCURRENT_SESSIONS,
         session_idle_timeout_minutes: 30,
     };
+
+    try {
+        const currentMtime = fs.statSync(SETTINGS_FILE).mtimeMs;
+        if (settingsCache && currentMtime === settingsMtime) {
+            return settingsCache;
+        }
+        settingsMtime = currentMtime;
+    } catch {
+        // File doesn't exist yet, fall through to read attempt
+    }
 
     try {
         const data = fs.readFileSync(SETTINGS_FILE, "utf8");
@@ -224,27 +233,3 @@ export function configureThread(threadId: number, updates: Partial<ThreadConfig>
     saveThreads(threads);
 }
 
-// ─── Session Tracking ───
-
-export function cleanupIdleSessions(sessions: Map<number, unknown>): number[] {
-    const threads = loadThreads();
-    const now = Date.now();
-    const closed: number[] = [];
-
-    for (const [threadId, session] of sessions) {
-        const key = String(threadId);
-        const config = threads[key];
-        if (!config) continue;
-
-        if (config.lastActive > 0 && now - config.lastActive > SESSION_IDLE_TIMEOUT_MS) {
-            // Close the session if it has a close method
-            if (session && typeof (session as { close?: () => void }).close === "function") {
-                (session as { close: () => void }).close();
-            }
-            sessions.delete(threadId);
-            closed.push(threadId);
-        }
-    }
-
-    return closed;
-}

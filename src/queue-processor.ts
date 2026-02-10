@@ -527,7 +527,9 @@ async function processMessage(messageFile: string): Promise<void> {
                 ? path.join(QUEUE_OUTGOING, `${messageId}.json`)
                 : path.join(QUEUE_OUTGOING, `${channel}_${messageId}_${Date.now()}.json`);
 
-        fs.writeFileSync(responseFile, JSON.stringify(responseData, null, 2));
+        const tmpFile = responseFile + ".tmp";
+        fs.writeFileSync(tmpFile, JSON.stringify(responseData, null, 2));
+        fs.renameSync(tmpFile, responseFile);
 
         log(
             "INFO",
@@ -666,6 +668,8 @@ async function shutdown(signal: string): Promise<void> {
 
     log("INFO", `Received ${signal}. Shutting down...`);
 
+    clearInterval(queueInterval);
+
     try {
         const threads = loadThreads();
         saveThreads(threads);
@@ -703,7 +707,8 @@ try {
 }
 
 // 5-second fallback interval
-const queueInterval = setInterval(() => {
+let queueInterval: ReturnType<typeof setInterval> | undefined;
+queueInterval = setInterval(() => {
     void processQueue();
 }, 5000);
 
