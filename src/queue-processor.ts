@@ -433,9 +433,10 @@ async function processMessage(messageFile: string): Promise<void> {
             const now = formatCurrentTime();
             const prefix = buildSourcePrefix(msg);
             const isNewSession = !threadConfig.sessionId;
+            const threadPrompt = buildThreadPrompt(threadConfig);
+            const historyContext = isNewSession ? buildHistoryContext(threadId, threadConfig.isMaster) : "";
             let fullPrompt: string;
             if (isNewSession) {
-                const historyContext = buildHistoryContext(threadId, threadConfig.isMaster);
                 const contextBlock = historyContext ? `\n\n${historyContext}\n\n` : "\n\n";
                 fullPrompt = `[${now}]${contextBlock}${prefix} ${message}`;
             } else {
@@ -447,10 +448,10 @@ async function processMessage(messageFile: string): Promise<void> {
                 threadId,
                 messageId,
                 model: effectiveModel,
-                systemPromptAppend: buildThreadPrompt(threadConfig).substring(0, 500),
-                userMessage: message,
+                systemPromptAppend: threadPrompt,
+                userMessage: `${prefix} ${message}`,
                 historyInjected: isNewSession,
-                historyLines: isNewSession ? (buildHistoryContext(threadId, threadConfig.isMaster).split("\n").length - 1) : 0,
+                historyLines: isNewSession ? historyContext.split("\n").length - 1 : 0,
                 promptLength: fullPrompt.length,
             });
 

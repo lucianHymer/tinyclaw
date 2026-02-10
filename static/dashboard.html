@@ -674,6 +674,11 @@ tr.clickable { cursor: pointer; }
     return '<span class="badge ' + cls + '">' + escapeHtml(model) + '</span>';
   }
 
+  function formatRAM(mb) {
+    if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+    return mb.toFixed(0) + ' MB';
+  }
+
   function barColor(pct) {
     if (pct < 60) return 'var(--accent-green)';
     if (pct < 80) return 'var(--accent-yellow)';
@@ -877,7 +882,7 @@ tr.clickable { cursor: pointer; }
       '</div>' +
       '<div class="stat-card">' +
         '<div class="label">RAM</div>' +
-        '<div class="value">' + ramUsed.toFixed(0) + ' / ' + ramTotal.toFixed(0) + ' MB</div>' +
+        '<div class="value">' + formatRAM(ramUsed) + ' / ' + formatRAM(ramTotal) + '</div>' +
         makeBar(ramPct) +
       '</div>' +
       '<div class="stat-card">' +
@@ -1254,7 +1259,7 @@ tr.clickable { cursor: pointer; }
 
     var metrics = [
       { label: 'CPU', value: cpu, text: cpu.toFixed(1) + '%' },
-      { label: 'RAM', value: ramPct, text: ramUsed.toFixed(0) + '/' + ramTotal.toFixed(0) + ' MB' },
+      { label: 'RAM', value: ramPct, text: formatRAM(ramUsed) + ' / ' + formatRAM(ramTotal) },
       { label: 'Disk', value: diskPct, text: diskUsed.toFixed(1) + '/' + diskTotal.toFixed(1) + ' GB' },
       { label: 'Load (1m)', value: loadPct, text: load[0].toFixed(2) },
     ];

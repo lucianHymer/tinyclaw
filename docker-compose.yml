@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   broker:
     build: ./broker
@@ -31,13 +29,14 @@ services:
       broker:
         condition: service_healthy
     volumes:
-      - tinyclaw-data:/app/.tinyclaw
-      - ${WORKSPACE_ROOT:-/home/clawcian/.openclaw/workspace}:/workspace
+      - ./.tinyclaw:/app/.tinyclaw
+      # Mount workspace at the same host path so threads.json cwd values work
+      - ${WORKSPACE_ROOT}:${WORKSPACE_ROOT}
       - ./secrets/github-installations.json:/secrets/github-installations.json:ro
+      - ${CLAUDE_CREDENTIALS}:/home/node/.claude/.credentials.json
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - NODE_ENV=production
-      - DEFAULT_CWD=/workspace
+      - DEFAULT_CWD=${WORKSPACE_ROOT}
       - CREDENTIAL_BROKER_URL=http://broker:3000
       - BROKER_SECRET=${BROKER_SECRET}
     networks:
@@ -56,8 +55,7 @@ services:
     depends_on:
       - bot
     volumes:
-      - tinyclaw-data:/app/.tinyclaw:ro
-      - /proc:/host/proc:ro
+      - ./.tinyclaw:/app/.tinyclaw:ro
     ports:
       - "127.0.0.1:3100:3100"
     networks:
@@ -72,19 +70,16 @@ services:
         limits:
           memory: 256M
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: always
-    command: tunnel run
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
-    depends_on:
-      - dashboard
-    networks:
-      - internal
-
-volumes:
-  tinyclaw-data:
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: always
+  #   command: tunnel run
+  #   environment:
+  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+  #   depends_on:
+  #     - dashboard
+  #   networks:
+  #     - internal
 
 networks:
   internal:

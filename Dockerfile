@@ -41,7 +41,13 @@ RUN chmod +x entrypoint.sh
 COPY docker/github-token-helper.sh /usr/local/bin/github-token-helper
 RUN chmod +x /usr/local/bin/github-token-helper
 
-# Configure git to use the credential broker helper
+# ── Non-root user setup ─────────────────────────────────────────────
+# node:22-slim provides a 'node' user (uid 1000). Set up its home dir.
+RUN mkdir -p /home/node/.claude && \
+    chown -R node:node /app /home/node
+
+# Configure git for the node user
+USER node
 RUN git config --global credential.helper /usr/local/bin/github-token-helper
 
 ENTRYPOINT ["./entrypoint.sh"]
