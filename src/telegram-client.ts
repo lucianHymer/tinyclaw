@@ -7,7 +7,6 @@
 import fs from "fs";
 import path from "path";
 import { Bot, Context } from "grammy";
-import { autoChatAction, AutoChatActionFlavor } from "@grammyjs/auto-chat-action";
 import { autoRetry } from "@grammyjs/auto-retry";
 import {
     loadThreads,
@@ -22,7 +21,7 @@ import { toErrorMessage } from "./types.js";
 
 // ─── Context Type ───
 
-type MyContext = Context & AutoChatActionFlavor;
+type MyContext = Context;
 
 // ─── Constants ───
 
@@ -99,6 +98,7 @@ interface PendingMessage {
     ctx: MyContext;
     chatId: number;
     threadId: number;
+    telegramMessageId: number;
 }
 
 const pendingMessages = new Map<string, PendingMessage>();
@@ -134,7 +134,6 @@ function splitMessage(text: string, maxLength = 4096): string[] {
 const settings = loadSettings();
 const bot = new Bot<MyContext>(settings.telegram_bot_token);
 
-bot.use(autoChatAction());
 bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 60 }));
 
 // ─── Commands ───
@@ -203,8 +202,6 @@ bot.on("message:text").filter(
         // Restrict to configured chat ID
         if (String(ctx.chat.id) !== settings.telegram_chat_id) return;
 
-        ctx.chatAction = "typing";
-
         const messageId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const queueData = {
             channel: "telegram",
@@ -225,7 +222,21 @@ bot.on("message:text").filter(
         fs.writeFileSync(tmpFile, JSON.stringify(queueData, null, 2));
         fs.renameSync(tmpFile, queueFile);
 
-        pendingMessages.set(messageId, { ctx, chatId: ctx.chat.id, threadId });
+        pendingMessages.set(messageId, {
+            ctx,
+            chatId: ctx.chat.id,
+            threadId,
+            telegramMessageId: ctx.msg.message_id,
+        });
+
+        // React with 👀 to acknowledge we've seen the message
+        try {
+            await bot.api.setMessageReaction(ctx.chat.id, ctx.msg.message_id,
+                [{ type: "emoji", emoji: "👀" as any }]);
+        } catch {
+            // Reactions may not be available — silently ignore
+        }
+
         log(
             "INFO",
             `Queued message from ${ctx.from.first_name} in thread ${threadId}: ${ctx.message.text.substring(0, 80)}`,
@@ -359,6 +370,22 @@ function cleanupPendingMessages(): void {
     }
 }
 
+// ─── Typing Indicator ───
+
+// Telegram's typing action expires after ~5 seconds.
+// Re-send every 4 seconds for all messages still being processed.
+async function sendTypingForPending(): Promise<void> {
+    for (const [, pending] of pendingMessages) {
+        try {
+            await bot.api.sendChatAction(pending.chatId, "typing", {
+                message_thread_id: pending.ctx.msg?.message_thread_id,
+            });
+        } catch {
+            // Ignore errors — bot may not have started yet or chat may be unavailable
+        }
+    }
+}
+
 // ─── Error Handler ───
 
 bot.catch((err) => {
@@ -374,6 +401,9 @@ process.once("SIGTERM", () => bot.stop());
 
 // Poll outgoing queue every 1 second
 setInterval(pollOutgoingQueue, 1000);
+
+// Send typing indicator every 4 seconds for pending messages
+setInterval(sendTypingForPending, 4000);
 
 // Clean up stale pending messages every 60 seconds
 setInterval(cleanupPendingMessages, 60_000);

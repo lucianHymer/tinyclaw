@@ -1,24 +1,20 @@
 #!/usr/bin/env node
 /**
- * Queue Processor - Agent SDK v2 Integration
+ * Queue Processor - Agent SDK v1 query() API
  *
  * Processes messages from all channels (Telegram, CLI, heartbeat, cross-thread, etc.)
- * one at a time via a file-based queue. Each thread gets its own persistent SDK session.
- * Smart routing selects the cheapest model capable of handling each message.
+ * one at a time via a file-based queue. Each thread gets its own persistent session
+ * via the resume mechanism. Smart routing selects the cheapest model per message.
  */
 
 import fs from "fs";
 import path from "path";
-import {
-    unstable_v2_createSession,
-    unstable_v2_resumeSession,
-    unstable_v2_prompt,
-} from "@anthropic-ai/claude-agent-sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
-    SDKSession,
     SDKMessage,
-    SDKSessionOptions,
     SDKResultMessage,
+    Options,
+    Query,
     CanUseTool as SDKCanUseTool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { route, DEFAULT_ROUTING_CONFIG, maxTier } from "./router/index.js";
@@ -32,6 +28,7 @@ import {
     buildEnrichedPrompt,
     buildHistoryContext,
 } from "./message-history.js";
+import { createTinyClawMcpServer } from "./mcp-tools.js";
 import type { MessageSource, MessageHistoryEntry } from "./message-history.js";
 import {
     loadThreads,
@@ -39,10 +36,8 @@ import {
     loadSettings,
     resetThread,
     configureThread,
-    canUseTool as sessionCanUseTool,
     buildThreadPrompt,
     buildHeartbeatPrompt,
-    cleanupIdleSessions,
 } from "./session-manager.js";
 import type { ThreadConfig, ThreadsMap } from "./session-manager.js";
 
@@ -107,15 +102,10 @@ function log(level: string, message: string): void {
 
 let processing = false;
 
-// ─── Active Session Tracking ───
-
-const activeSessions = new Map<number, SDKSession>();
-
 // ─── SDK canUseTool Adapter ───
-// The SDK expects a 3-arg canUseTool; our session-manager exports a simpler 2-arg version.
-// We adapt it here so the type system is satisfied.
 
 const sdkCanUseTool: SDKCanUseTool = async (toolName, input, _options) => {
+    const { canUseTool: sessionCanUseTool } = await import("./session-manager.js");
     const result = await sessionCanUseTool(toolName, input);
     if (result.behavior === "allow") {
         return { behavior: "allow", updatedInput: result.updatedInput as Record<string, unknown> | undefined };
@@ -133,7 +123,6 @@ function getRetryCount(filename: string): number {
 }
 
 function buildRetryFilename(filename: string, retryNum: number): string {
-    // Remove any existing _retryN suffix before adding the new one
     const base = filename.replace(/_retry\d+/, "");
     const ext = path.extname(base);
     const stem = base.slice(0, -ext.length);
@@ -169,15 +158,14 @@ function buildSourcePrefix(msg: IncomingMessage): string {
     return prefixMap[msg.source ?? "user"];
 }
 
-// ─── SDK Session Builder ───
+// ─── Build v1 query options ───
 
-function buildSessionOptions(
+function buildQueryOptions(
+    threadId: number,
     threadConfig: ThreadConfig,
     effectiveModel: string,
-): SDKSessionOptions {
-    // permissionMode and allowDangerouslySkipPermissions are passed through
-    // to the SDK but may not be in the SDKSessionOptions type definition yet.
-    return {
+): Options {
+    const opts: Options = {
         model: effectiveModel,
         cwd: threadConfig.cwd,
         canUseTool: sdkCanUseTool,
@@ -187,27 +175,37 @@ function buildSessionOptions(
             preset: "claude_code",
             append: buildThreadPrompt(threadConfig),
         },
+        mcpServers: {
+            tinyclaw: createTinyClawMcpServer(threadId),
+        },
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
-    } as SDKSessionOptions;
+    };
+
+    // Resume existing session if available
+    if (threadConfig.sessionId) {
+        opts.resume = threadConfig.sessionId;
+    }
+
+    return opts;
 }
 
-// ─── Collect full response text from SDK stream ───
+// ─── Collect full response text from query stream ───
 
-async function collectStreamResponse(
-    session: SDKSession,
+async function collectQueryResponse(
+    q: Query,
 ): Promise<{ text: string; sessionId: string | undefined }> {
     const parts: string[] = [];
     let capturedSessionId: string | undefined;
 
-    for await (const msg of session.stream()) {
+    for await (const msg of q) {
         // Always capture the latest session_id (it may change after compaction)
         if ("session_id" in msg && msg.session_id) {
             capturedSessionId = msg.session_id;
         }
 
         if (msg.type === "assistant") {
-            const content = msg.message?.content;
+            const content = (msg as any).message?.content;
             if (Array.isArray(content)) {
                 for (const block of content) {
                     if (block.type === "text" && typeof block.text === "string") {
@@ -218,10 +216,10 @@ async function collectStreamResponse(
         }
 
         if (msg.type === "result") {
-            if (msg.subtype === "success" && "result" in msg && typeof msg.result === "string") {
-                // Use the result field as the canonical response if available
+            const result = msg as SDKResultMessage;
+            if (result.subtype === "success" && "result" in result && typeof result.result === "string") {
                 if (parts.length === 0) {
-                    parts.push(msg.result);
+                    parts.push(result.result);
                 }
             }
         }
@@ -230,7 +228,7 @@ async function collectStreamResponse(
     return { text: parts.join(""), sessionId: capturedSessionId };
 }
 
-// ─── Heartbeat Processing (one-shot, no session) ───
+// ─── Heartbeat Processing (one-shot, no persistent session) ───
 
 async function processHeartbeat(msg: IncomingMessage): Promise<string> {
     const threads = loadThreads();
@@ -245,25 +243,28 @@ async function processHeartbeat(msg: IncomingMessage): Promise<string> {
 
     log("INFO", `Heartbeat one-shot for thread ${msg.threadId}`);
 
-    const result: SDKResultMessage = await unstable_v2_prompt(fullPrompt, {
-        model: "haiku",
-        cwd: threadConfig.cwd,
-        canUseTool: sdkCanUseTool,
-        settingSources: ["project"],
-        systemPrompt: {
-            type: "preset",
-            preset: "claude_code",
-            append: buildThreadPrompt(threadConfig),
+    const q = query({
+        prompt: fullPrompt,
+        options: {
+            model: "haiku",
+            cwd: threadConfig.cwd,
+            canUseTool: sdkCanUseTool,
+            settingSources: ["project"],
+            systemPrompt: {
+                type: "preset",
+                preset: "claude_code",
+                append: buildThreadPrompt(threadConfig),
+            },
+            mcpServers: {
+                tinyclaw: createTinyClawMcpServer(msg.threadId),
+            },
+            permissionMode: "bypassPermissions",
+            allowDangerouslySkipPermissions: true,
         },
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
-    } as SDKSessionOptions);
+    });
 
-    if (result.subtype === "success" && "result" in result) {
-        return result.result;
-    }
-
-    return "HEARTBEAT_OK";
+    const { text } = await collectQueryResponse(q);
+    return text.trim() || "HEARTBEAT_OK";
 }
 
 // ─── Route a message to the right model ───
@@ -272,14 +273,12 @@ function routeMessage(
     msg: IncomingMessage,
     recentHistory: MessageHistoryEntry[],
 ): { effectiveModel: string; decision: RoutingDecision } {
-    // Build enriched prompt for the router
     const enrichedPrompt = buildEnrichedPrompt(
         recentHistory,
         msg.message,
         msg.replyToText,
     );
 
-    // Run the router
     const decision = route(enrichedPrompt, undefined, {
         config: DEFAULT_ROUTING_CONFIG,
     });
@@ -287,82 +286,17 @@ function routeMessage(
     let effectiveTier: Tier;
 
     if (msg.isReply && msg.replyToModel) {
-        // Reply: upgrade only (never downgrade from original model)
         const originalTier = modelToTier(msg.replyToModel);
         effectiveTier = maxTier(originalTier, decision.tier);
     } else {
-        // Fresh message: router picks freely
         effectiveTier = decision.tier;
     }
 
     const effectiveModel = tierToModel(effectiveTier);
 
-    // Log the routing decision
     logDecision(decision, enrichedPrompt, ROUTING_LOG);
 
     return { effectiveModel, decision };
-}
-
-// ─── Get or Create SDK Session ───
-
-async function getSession(
-    threadId: number,
-    threadConfig: ThreadConfig,
-    effectiveModel: string,
-): Promise<{ session: SDKSession; isNew: boolean }> {
-    const existing = activeSessions.get(threadId);
-    const options = buildSessionOptions(threadConfig, effectiveModel);
-
-    // If model changed, close old session and resume with new model
-    if (existing && threadConfig.model !== effectiveModel && threadConfig.sessionId) {
-        log("INFO", `Model changed for thread ${threadId}: ${threadConfig.model} -> ${effectiveModel}. Re-creating session.`);
-        try {
-            existing.close();
-        } catch {
-            // Ignore close errors
-        }
-        activeSessions.delete(threadId);
-
-        try {
-            const session = unstable_v2_resumeSession(threadConfig.sessionId, {
-                ...options,
-                model: effectiveModel,
-            });
-            activeSessions.set(threadId, session);
-            return { session, isNew: false };
-        } catch (err) {
-            log("WARN", `Failed to resume session for thread ${threadId} after model change: ${toErrorMessage(err)}. Creating new session.`);
-            // Fall through to create new session
-        }
-    }
-
-    // If we have a cached session and model didn't change, return it
-    if (existing) {
-        return { session: existing, isNew: false };
-    }
-
-    // Try to resume existing session
-    if (threadConfig.sessionId) {
-        try {
-            const session = unstable_v2_resumeSession(threadConfig.sessionId, options);
-            activeSessions.set(threadId, session);
-            return { session, isNew: false };
-        } catch (err) {
-            log("WARN", `Failed to resume session ${threadConfig.sessionId} for thread ${threadId}: ${toErrorMessage(err)}. Creating new session.`);
-            // Clear stale sessionId
-            const threads = loadThreads();
-            const key = String(threadId);
-            if (threads[key]) {
-                delete threads[key].sessionId;
-                saveThreads(threads);
-            }
-        }
-    }
-
-    // Create a fresh session
-    const session = unstable_v2_createSession(options);
-    activeSessions.set(threadId, session);
-    return { session, isNew: true };
 }
 
 // ─── Process a Single Message ───
@@ -373,7 +307,6 @@ async function processMessage(messageFile: string): Promise<void> {
     const retryCount = getRetryCount(filename);
 
     try {
-        // Move to processing
         fs.renameSync(messageFile, processingFile);
     } catch (err) {
         log("ERROR", `Failed to move ${filename} to processing: ${toErrorMessage(err)}`);
@@ -430,7 +363,6 @@ async function processMessage(messageFile: string): Promise<void> {
             let threadConfig = threads[key];
 
             if (!threadConfig) {
-                // Auto-create thread config for unknown threads
                 threadConfig = {
                     name: `Thread ${threadId}`,
                     cwd: path.join("/home/clawcian/.openclaw/workspace"),
@@ -445,15 +377,12 @@ async function processMessage(messageFile: string): Promise<void> {
             // Update lastActive
             threads[key].lastActive = Date.now();
 
-            // ─── Get or create session ───
-            const { session, isNew } = await getSession(threadId, threadConfig, effectiveModel);
-
             // ─── Build the full prompt ───
-            // Only inject history context on new sessions (resumed sessions already have context)
             const now = formatCurrentTime();
             const prefix = buildSourcePrefix(msg);
+            const isNewSession = !threadConfig.sessionId;
             let fullPrompt: string;
-            if (isNew) {
+            if (isNewSession) {
                 const historyContext = buildHistoryContext(threadId, threadConfig.isMaster);
                 const contextBlock = historyContext ? `\n\n${historyContext}\n\n` : "\n\n";
                 fullPrompt = `[${now}]${contextBlock}${prefix} ${message}`;
@@ -461,15 +390,15 @@ async function processMessage(messageFile: string): Promise<void> {
                 fullPrompt = `[${now}] ${prefix} ${message}`;
             }
 
-            try {
-                // Send the message
-                await session.send(fullPrompt);
+            // ─── Send query ───
+            const options = buildQueryOptions(threadId, threadConfig, effectiveModel);
+            const q = query({ prompt: fullPrompt, options });
 
-                // Collect the response
-                const { text, sessionId: newSessionId } = await collectStreamResponse(session);
+            try {
+                const { text, sessionId: newSessionId } = await collectQueryResponse(q);
                 responseText = text.trim();
 
-                // Persist updated sessionId if it changed
+                // Persist session ID for future resume
                 if (newSessionId) {
                     const freshThreads = loadThreads();
                     const freshKey = String(threadId);
@@ -480,20 +409,10 @@ async function processMessage(messageFile: string): Promise<void> {
                         saveThreads(freshThreads);
                     }
                 }
-            } catch (sessionErr) {
-                // Session error: close and remove from cache, let retry handle it
-                log("ERROR", `Session error for thread ${threadId}: ${toErrorMessage(sessionErr)}`);
-                try {
-                    const cached = activeSessions.get(threadId);
-                    if (cached) {
-                        cached.close();
-                    }
-                } catch {
-                    // Ignore
-                }
-                activeSessions.delete(threadId);
+            } catch (queryErr) {
+                log("ERROR", `Query error for thread ${threadId}: ${toErrorMessage(queryErr)}`);
 
-                // Clear stale sessionId
+                // Clear stale sessionId on error
                 const freshThreads = loadThreads();
                 const freshKey = String(threadId);
                 if (freshThreads[freshKey]) {
@@ -501,7 +420,7 @@ async function processMessage(messageFile: string): Promise<void> {
                     saveThreads(freshThreads);
                 }
 
-                throw sessionErr;
+                throw queryErr;
             }
         }
 
@@ -567,12 +486,10 @@ function handleRetry(processingFile: string, filename: string, retryCount: numbe
     if (!fs.existsSync(processingFile)) return;
 
     if (retryCount >= MAX_RETRIES - 1) {
-        // Max retries exhausted - move to dead-letter
         moveToDeadLetter(processingFile, filename);
         return;
     }
 
-    // Rename with incremented retry count and move back to incoming
     const newRetry = retryCount + 1;
     const retryFilename = buildRetryFilename(filename, newRetry);
     const retryPath = path.join(QUEUE_INCOMING, retryFilename);
@@ -593,7 +510,6 @@ function moveToDeadLetter(filePath: string, filename: string): void {
         log("ERROR", `Moved to dead-letter: ${filename}`);
     } catch (err) {
         log("ERROR", `Failed to move ${filename} to dead-letter: ${toErrorMessage(err)}`);
-        // Last resort: just delete the processing file so it doesn't block the queue
         try {
             fs.unlinkSync(filePath);
         } catch {
@@ -621,11 +537,6 @@ async function processCommands(): Promise<void> {
 
             if (data.command === "reset") {
                 resetThread(data.threadId);
-                const cached = activeSessions.get(data.threadId);
-                if (cached) {
-                    try { cached.close(); } catch { /* ignore */ }
-                    activeSessions.delete(data.threadId);
-                }
                 log("INFO", `Command: reset thread ${data.threadId}`);
             } else if (data.command === "setdir" && data.args?.cwd) {
                 configureThread(data.threadId, { cwd: data.args.cwd });
@@ -671,7 +582,6 @@ async function processQueue(): Promise<void> {
             log("DEBUG", `Found ${files.length} message(s) in queue`);
         }
 
-        // Process one at a time
         for (const file of files) {
             await processMessage(file.path);
         }
@@ -679,15 +589,6 @@ async function processQueue(): Promise<void> {
         log("ERROR", `Queue scan error: ${toErrorMessage(error)}`);
     } finally {
         processing = false;
-    }
-}
-
-// ─── Idle Session Cleanup ───
-
-function cleanupIdle(): void {
-    const closed = cleanupIdleSessions(activeSessions as Map<number, unknown>);
-    if (closed.length > 0) {
-        log("INFO", `Cleaned up ${closed.length} idle session(s): [${closed.join(", ")}]`);
     }
 }
 
@@ -701,18 +602,6 @@ async function shutdown(signal: string): Promise<void> {
 
     log("INFO", `Received ${signal}. Shutting down...`);
 
-    // Close all active sessions
-    for (const [threadId, session] of activeSessions) {
-        try {
-            log("INFO", `Closing session for thread ${threadId}`);
-            session.close();
-        } catch (err) {
-            log("WARN", `Error closing session for thread ${threadId}: ${toErrorMessage(err)}`);
-        }
-    }
-    activeSessions.clear();
-
-    // Save threads state
     try {
         const threads = loadThreads();
         saveThreads(threads);
@@ -734,7 +623,7 @@ process.on("SIGTERM", () => {
 
 // ─── Startup ───
 
-log("INFO", "Queue processor started (Agent SDK v2 + smart routing)");
+log("INFO", "Queue processor started (Agent SDK v1 query API + smart routing)");
 log("INFO", `Watching: ${QUEUE_INCOMING}`);
 
 // fs.watch for near-instant pickup
@@ -753,9 +642,6 @@ try {
 const queueInterval = setInterval(() => {
     void processQueue();
 }, 5000);
-
-// Periodic idle session cleanup (every 5 minutes)
-const cleanupInterval = setInterval(cleanupIdle, 5 * 60 * 1000);
 
 // Initial queue drain on startup
 void processQueue();

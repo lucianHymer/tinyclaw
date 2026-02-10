@@ -2,10 +2,10 @@
 # TinyClaw - Telegram Forum Agent with Smart Routing
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TMUX_SESSION="tinyclaw"
 LOG_DIR="$SCRIPT_DIR/.tinyclaw/logs"
 SETTINGS_FILE="$SCRIPT_DIR/.tinyclaw/settings.json"
 QUEUE_INCOMING="$SCRIPT_DIR/.tinyclaw/queue/incoming"
+PID_DIR="$SCRIPT_DIR/.tinyclaw/pids"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -13,11 +13,15 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-mkdir -p "$LOG_DIR"
-mkdir -p "$QUEUE_INCOMING"
+mkdir -p "$LOG_DIR" "$QUEUE_INCOMING" "$PID_DIR"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/daemon.log"
+}
+
+# Check if systemd services are installed
+has_systemd() {
+    systemctl list-unit-files tinyclaw-telegram.service &>/dev/null
 }
 
 # Load settings from JSON
@@ -33,19 +37,19 @@ load_settings() {
     return 0
 }
 
-# Check if session exists
-session_exists() {
-    tmux has-session -t "$TMUX_SESSION" 2>/dev/null
+# Check if processes are running
+is_running() {
+    pgrep -f "dist/$1.js" > /dev/null 2>&1
 }
 
 # Start daemon
 start_daemon() {
-    if session_exists; then
-        echo -e "${YELLOW}Session already running${NC}"
+    if is_running "telegram-client" && is_running "queue-processor"; then
+        echo -e "${YELLOW}TinyClaw is already running${NC}"
         return 1
     fi
 
-    log "Starting TinyClaw daemon..."
+    log "Starting TinyClaw..."
 
     # Check if Node.js dependencies are installed
     if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
@@ -67,7 +71,6 @@ start_daemon() {
         echo ""
         "$SCRIPT_DIR/setup-wizard.sh"
 
-        # Reload settings after setup
         if ! load_settings; then
             echo -e "${RED}Setup failed or was cancelled${NC}"
             return 1
@@ -87,54 +90,78 @@ start_daemon() {
         return 1
     fi
 
-    echo -e "${BLUE}Channel:${NC}"
-    echo -e "  ${GREEN}Telegram Forum${NC}"
-    echo ""
+    if has_systemd; then
+        # Use systemd
+        sudo systemctl start tinyclaw-telegram tinyclaw-queue
+        echo -e "${GREEN}TinyClaw started via systemd${NC}"
+        echo "  Logs: journalctl -f -u tinyclaw-telegram -u tinyclaw-queue"
+    else
+        # Fallback: background processes with PID tracking
+        cd "$SCRIPT_DIR"
+        node dist/telegram-client.js >> "$LOG_DIR/telegram.log" 2>&1 &
+        echo $! > "$PID_DIR/telegram.pid"
 
-    # 3 panes layout:
-    # +----------+----------+
-    # | Telegram |  Queue   |
-    # +----------+----------+
-    # |        Logs         |
-    # +---------------------+
-    tmux new-session -d -s "$TMUX_SESSION" -n "tinyclaw" -c "$SCRIPT_DIR"
-    tmux split-window -v -t "$TMUX_SESSION" -c "$SCRIPT_DIR"
-    tmux split-window -h -t "$TMUX_SESSION:0.0" -c "$SCRIPT_DIR"
+        node dist/queue-processor.js >> "$LOG_DIR/queue.log" 2>&1 &
+        echo $! > "$PID_DIR/queue.pid"
 
-    tmux send-keys -t "$TMUX_SESSION:0.0" "cd '$SCRIPT_DIR' && node dist/telegram-client.js" C-m
-    tmux send-keys -t "$TMUX_SESSION:0.1" "cd '$SCRIPT_DIR' && node dist/queue-processor.js" C-m
-    tmux send-keys -t "$TMUX_SESSION:0.2" "cd '$SCRIPT_DIR' && tail -f .tinyclaw/logs/telegram.log .tinyclaw/logs/queue.log" C-m
+        echo -e "${GREEN}TinyClaw started (background processes)${NC}"
+        echo "  Logs: ./tinyclaw.sh logs"
+    fi
 
-    tmux select-pane -t "$TMUX_SESSION:0.0" -T "Telegram"
-    tmux select-pane -t "$TMUX_SESSION:0.1" -T "Queue"
-    tmux select-pane -t "$TMUX_SESSION:0.2" -T "Logs"
-
-    echo ""
-    echo -e "${GREEN}TinyClaw started${NC}"
-    echo ""
-    echo -e "${GREEN}Commands:${NC}"
-    echo "  Status:  ./tinyclaw.sh status"
-    echo "  Logs:    ./tinyclaw.sh logs [telegram|queue|heartbeat|daemon]"
-    echo "  Attach:  tmux attach -t $TMUX_SESSION"
-    echo ""
-
-    log "Daemon started with 3 panes (telegram)"
+    log "TinyClaw started"
 }
 
 # Stop daemon
 stop_daemon() {
     log "Stopping TinyClaw..."
 
-    if session_exists; then
-        tmux kill-session -t "$TMUX_SESSION"
+    if has_systemd; then
+        sudo systemctl stop tinyclaw-telegram tinyclaw-queue 2>/dev/null
     fi
 
-    # Kill any remaining processes
-    pkill -f "dist/telegram-client.js" || true
-    pkill -f "dist/queue-processor.js" || true
+    # Kill by PID files
+    for svc in telegram queue; do
+        local pidfile="$PID_DIR/$svc.pid"
+        if [ -f "$pidfile" ]; then
+            kill "$(cat "$pidfile")" 2>/dev/null
+            rm -f "$pidfile"
+        fi
+    done
+
+    # Fallback: pkill
+    pkill -f "dist/telegram-client.js" 2>/dev/null || true
+    pkill -f "dist/queue-processor.js" 2>/dev/null || true
 
     echo -e "${GREEN}TinyClaw stopped${NC}"
-    log "Daemon stopped"
+    log "TinyClaw stopped"
+}
+
+# Install systemd services
+install_systemd() {
+    echo -e "${BLUE}Installing systemd services...${NC}"
+
+    # Update WorkingDirectory and User in service files
+    local user
+    user=$(whoami)
+
+    for svc in tinyclaw-telegram tinyclaw-queue; do
+        local src="$SCRIPT_DIR/systemd/$svc.service"
+        if [ ! -f "$src" ]; then
+            echo -e "${RED}Missing $src${NC}"
+            return 1
+        fi
+
+        # Substitute placeholders for this machine
+        sed "s|__USER__|$user|g;s|__WORKING_DIR__|$SCRIPT_DIR|g" \
+            "$src" | sudo tee "/etc/systemd/system/$svc.service" > /dev/null
+    done
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable tinyclaw-telegram tinyclaw-queue
+
+    echo -e "${GREEN}Systemd services installed and enabled${NC}"
+    echo "  Start:   ./tinyclaw.sh start"
+    echo "  Logs:    journalctl -f -u tinyclaw-telegram -u tinyclaw-queue"
 }
 
 # Send message to queue from CLI
@@ -168,32 +195,28 @@ status_daemon() {
     echo "==============="
     echo ""
 
-    if session_exists; then
-        echo -e "Tmux Session:    ${GREEN}Running${NC}"
-        echo "  Attach: tmux attach -t $TMUX_SESSION"
+    if has_systemd; then
+        echo -e "${BLUE}Mode: systemd${NC}"
+        echo ""
+        systemctl --no-pager status tinyclaw-telegram 2>/dev/null | head -4
+        echo ""
+        systemctl --no-pager status tinyclaw-queue 2>/dev/null | head -4
     else
-        echo -e "Tmux Session:    ${RED}Not Running${NC}"
-        echo "  Start: ./tinyclaw.sh start"
+        echo -e "${BLUE}Mode: background processes${NC}"
     fi
 
     echo ""
 
-    if pgrep -f "dist/telegram-client.js" > /dev/null; then
+    if is_running "telegram-client"; then
         echo -e "Telegram Client: ${GREEN}Running${NC}"
     else
         echo -e "Telegram Client: ${RED}Not Running${NC}"
     fi
 
-    if pgrep -f "dist/queue-processor.js" > /dev/null; then
+    if is_running "queue-processor"; then
         echo -e "Queue Processor: ${GREEN}Running${NC}"
     else
         echo -e "Queue Processor: ${RED}Not Running${NC}"
-    fi
-
-    if pgrep -f "heartbeat-cron.sh" > /dev/null; then
-        echo -e "Heartbeat Cron:  ${GREEN}Running${NC}"
-    else
-        echo -e "Heartbeat Cron:  ${RED}Not Running${NC}"
     fi
 
     echo ""
@@ -205,39 +228,38 @@ status_daemon() {
     echo "Recent Queue Activity:"
     echo "----------------------"
     tail -n 5 "$LOG_DIR/queue.log" 2>/dev/null || echo "  No queue activity yet"
-
-    echo ""
-    echo "Recent Heartbeats:"
-    echo "------------------"
-    tail -n 3 "$LOG_DIR/heartbeat.log" 2>/dev/null || echo "  No heartbeat logs yet"
-
-    echo ""
-    echo "Logs:"
-    echo "  Telegram:  tail -f $LOG_DIR/telegram.log"
-    echo "  Queue:     tail -f $LOG_DIR/queue.log"
-    echo "  Heartbeat: tail -f $LOG_DIR/heartbeat.log"
-    echo "  Daemon:    tail -f $LOG_DIR/daemon.log"
 }
 
 # View logs
 logs() {
-    case "${1:-telegram}" in
-        telegram|tg)
-            tail -f "$LOG_DIR/telegram.log"
-            ;;
-        queue|q)
-            tail -f "$LOG_DIR/queue.log"
-            ;;
-        heartbeat|hb)
-            tail -f "$LOG_DIR/heartbeat.log"
-            ;;
-        daemon|all)
-            tail -f "$LOG_DIR/daemon.log"
-            ;;
-        *)
-            echo "Usage: $0 logs [telegram|queue|heartbeat|daemon]"
-            ;;
-    esac
+    if has_systemd; then
+        case "${1:-all}" in
+            telegram|tg)
+                journalctl -f -u tinyclaw-telegram
+                ;;
+            queue|q)
+                journalctl -f -u tinyclaw-queue
+                ;;
+            *)
+                journalctl -f -u tinyclaw-telegram -u tinyclaw-queue
+                ;;
+        esac
+    else
+        case "${1:-telegram}" in
+            telegram|tg)
+                tail -f "$LOG_DIR/telegram.log"
+                ;;
+            queue|q)
+                tail -f "$LOG_DIR/queue.log"
+                ;;
+            daemon|all)
+                tail -f "$LOG_DIR/daemon.log"
+                ;;
+            *)
+                echo "Usage: $0 logs [telegram|queue|daemon]"
+                ;;
+        esac
+    fi
 }
 
 case "${1:-}" in
@@ -254,6 +276,9 @@ case "${1:-}" in
         ;;
     status)
         status_daemon
+        ;;
+    install)
+        install_systemd
         ;;
     send)
         if [ -z "$2" ]; then
@@ -275,7 +300,6 @@ case "${1:-}" in
         ;;
     model)
         if [ -z "$2" ]; then
-            # Show current model
             if [ -f "$SETTINGS_FILE" ]; then
                 CURRENT_MODEL=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_FILE" | cut -d'"' -f4)
                 echo -e "${BLUE}Current model: ${GREEN}$CURRENT_MODEL${NC}"
@@ -291,7 +315,6 @@ case "${1:-}" in
                         exit 1
                     fi
 
-                    # Update model in settings.json
                     if [[ "$OSTYPE" == "darwin"* ]]; then
                         sed -i '' "s/\"model\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"model\": \"$2\"/" "$SETTINGS_FILE"
                     else
@@ -299,23 +322,14 @@ case "${1:-}" in
                     fi
 
                     echo -e "${GREEN}Model switched to: $2${NC}"
-                    echo ""
-                    echo "Note: This affects the queue processor. Changes take effect on next message."
+                    echo "Note: Changes take effect on next message."
                     ;;
                 *)
                     echo "Usage: $0 model {sonnet|opus}"
-                    echo ""
-                    echo "Examples:"
-                    echo "  $0 model          # Show current model"
-                    echo "  $0 model sonnet   # Switch to Sonnet"
-                    echo "  $0 model opus     # Switch to Opus"
                     exit 1
                     ;;
             esac
         fi
-        ;;
-    attach)
-        tmux attach -t "$TMUX_SESSION"
         ;;
     setup)
         "$SCRIPT_DIR/setup-wizard.sh"
@@ -323,26 +337,19 @@ case "${1:-}" in
     *)
         echo -e "${BLUE}TinyClaw - Telegram Forum Agent with Smart Routing${NC}"
         echo ""
-        echo "Usage: $0 {start|stop|restart|status|setup|send|logs|reset|model|attach}"
+        echo "Usage: $0 {start|stop|restart|status|install|setup|send|logs|reset|model}"
         echo ""
         echo "Commands:"
         echo "  start              Start TinyClaw"
         echo "  stop               Stop all processes"
         echo "  restart            Restart TinyClaw"
         echo "  status             Show current status"
+        echo "  install            Install systemd services (Ubuntu)"
         echo "  setup              Run setup wizard"
         echo "  send <msg>         Send message to queue from CLI"
-        echo "  logs [type]        View logs (telegram|queue|heartbeat|daemon)"
-        echo "  reset              Reset conversation (next message starts fresh)"
+        echo "  logs [type]        View logs (telegram|queue|all)"
+        echo "  reset              Reset conversation"
         echo "  model [sonnet|opus] Show or switch Claude model"
-        echo "  attach             Attach to tmux session"
-        echo ""
-        echo "Examples:"
-        echo "  $0 start"
-        echo "  $0 status"
-        echo "  $0 model opus"
-        echo "  $0 send 'What time is it?'"
-        echo "  $0 logs telegram"
         echo ""
         exit 1
         ;;
