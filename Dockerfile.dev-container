@@ -1,0 +1,88 @@
+# Dockerfile.dev-container
+# Purpose-built image for developer containers with Claude Code CLI, sshd, and dev tools.
+# NOT extending the bot Dockerfile — the bot image has Claude Agent SDK v2 and queue
+# processing code; this image needs Claude Code CLI, sshd, and dev tools.
+FROM ubuntu:24.04
+
+# System packages
+RUN apt-get update && apt-get install -y \
+    openssh-server \
+    git \
+    curl \
+    jq \
+    tmux \
+    vim \
+    build-essential \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs
+
+# Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh
+
+# SSH configuration (hardened per security review)
+RUN mkdir /var/run/sshd \
+    && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    && sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config \
+    && echo "AllowUsers dev" >> /etc/ssh/sshd_config \
+    && echo "MaxAuthTries 3" >> /etc/ssh/sshd_config \
+    && echo "LoginGraceTime 30" >> /etc/ssh/sshd_config \
+    && echo "AllowAgentForwarding no" >> /etc/ssh/sshd_config \
+    && echo "AllowTcpForwarding no" >> /etc/ssh/sshd_config \
+    && echo "X11Forwarding no" >> /etc/ssh/sshd_config
+
+# Generate unique host keys at container start (not build time)
+RUN rm -f /etc/ssh/ssh_host_*
+
+# Create dev user
+RUN useradd -m -s /bin/bash -G sudo dev \
+    && echo "dev ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/dev \
+    && mkdir -p /home/dev/.ssh /home/dev/repos \
+    && chown -R dev:dev /home/dev
+
+# Git credential helper for GitHub App broker
+COPY docker/github-token-helper.sh /usr/local/bin/github-token-helper.sh
+COPY docker/gh-wrapper.sh /usr/local/bin/gh-wrapper.sh
+RUN chmod +x /usr/local/bin/github-token-helper.sh /usr/local/bin/gh-wrapper.sh \
+    && ln -sf /usr/local/bin/gh-wrapper.sh /usr/local/bin/gh-real-path
+
+# Git config (credential broker integration)
+RUN git config --system credential.helper '!/usr/local/bin/github-token-helper.sh' \
+    && git config --system user.name "Dev" \
+    && git config --system user.email "dev@tinyclaw"
+
+# Replace gh binary with wrapper
+RUN mv /usr/bin/gh /usr/bin/gh-real \
+    && ln -sf /usr/local/bin/gh-wrapper.sh /usr/bin/gh
+
+# tmux configuration (system-wide)
+COPY docker/tmux.conf /etc/tmux.conf
+
+# CRITICAL: Docker ENV vars are NOT inherited by SSH sessions.
+# Must source them from /etc/profile.d/ for login shells.
+RUN echo '#!/bin/bash' > /etc/profile.d/broker-env.sh \
+    && echo 'export CREDENTIAL_BROKER_URL="${CREDENTIAL_BROKER_URL}"' >> /etc/profile.d/broker-env.sh \
+    && echo 'export BROKER_SECRET="${BROKER_SECRET}"' >> /etc/profile.d/broker-env.sh \
+    && chmod +x /etc/profile.d/broker-env.sh
+
+# Auto-attach tmux on SSH login (in profile.d, not .bashrc — only runs for login shells)
+RUN echo '#!/bin/bash' > /etc/profile.d/tmux-auto.sh \
+    && echo 'if [ -n "$SSH_CONNECTION" ] && [ -z "$TMUX" ] && [ -t 0 ]; then' >> /etc/profile.d/tmux-auto.sh \
+    && echo '    exec tmux new-session -A -s main' >> /etc/profile.d/tmux-auto.sh \
+    && echo 'fi' >> /etc/profile.d/tmux-auto.sh \
+    && chmod +x /etc/profile.d/tmux-auto.sh
+
+# Generate host keys on first start + start sshd
+EXPOSE 22
+CMD ["bash", "-c", "ssh-keygen -A && exec /usr/sbin/sshd -D -e"]

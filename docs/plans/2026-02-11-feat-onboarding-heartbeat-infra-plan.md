@@ -571,8 +571,6 @@ set -g status-left-length 30
 4. `ssh claude-dev` → back in the exact same place, same Claude session running
 5. No tmux commands needed. Ever.
 
-**For the rare "I need a second terminal pane" moment:** The onboarding doc mentions `Ctrl+B %` (split) and `Ctrl+B arrow` (switch panes). That's the only tmux knowledge they'll ever need.
-
 ### Credential Flow (End-to-End)
 
 ```
@@ -619,9 +617,10 @@ Create `docs/onboarding/` with:
 pick a forum topic (each one is a separate Claude session on a specific repo),
 and message it. Claude reads the code, does the work, responds.
 
-**Claude Code CLI** — Deep work. SSH into your container, run `claude` in a repo,
-and let it loose on complex multi-file changes, long debugging sessions, or anything
-that needs bypass-permissions mode.
+**Claude Code CLI** — Deep work. SSH into your container, run
+`claude --dangerously-skip-permissions` in a repo, and let it loose on complex
+multi-file changes, long debugging sessions, or anything that needs
+bypass-permissions mode.
 
 Both interfaces talk to the same repos. Use whichever fits the task.
 
@@ -659,7 +658,8 @@ Add this to your ~/.ssh/config:
     Click a pane to switch to it
     Drag borders to resize
 
-That's all the terminal knowledge you need.
+    This is using tmux, if you want to go deeper and/or customize your ~/.tmuxconf
+
 ```
 
 **`ssh-config-snippet.txt`**:

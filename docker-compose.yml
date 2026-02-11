@@ -34,6 +34,8 @@ services:
       - ${WORKSPACE_ROOT}:${WORKSPACE_ROOT}
       - ./secrets/github-installations.json:/secrets/github-installations.json:ro
       - ${CLAUDE_CREDENTIALS}:/home/node/.claude/.credentials.json
+      # Master thread knowledge base (local-only git repo)
+      - /home/clawcian/.openclaw/knowledge-base:/home/clawcian/.openclaw/knowledge-base
     environment:
       - NODE_ENV=production
       - DEFAULT_CWD=${WORKSPACE_ROOT}
@@ -47,6 +49,31 @@ services:
           memory: 2G
           cpus: '2.0'
 
+  docker-proxy:
+    image: wollomatic/socket-proxy:1
+    command:
+      - "-listenip=0.0.0.0"
+      - "-allowfrom=0.0.0.0/0"
+      - "-allowGET=/v1\\..{1,2}/containers/json"
+      - "-allowGET=/v1\\..{1,2}/containers/.+/json"
+      - "-allowGET=/v1\\..{1,2}/containers/.+/stats"
+      - "-allowPOST=/v1\\..{1,2}/containers/.+/update"
+      - "-allowGET=/v1\\..{1,2}/_ping"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2375/v1.47/_ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   dashboard:
     build:
       context: .
@@ -54,10 +81,14 @@ services:
     restart: always
     depends_on:
       - bot
+      - docker-proxy
     volumes:
       - ./.tinyclaw:/app/.tinyclaw:ro
     ports:
       - "127.0.0.1:3100:3100"
+    environment:
+      - DOCKER_PROXY_URL=http://docker-proxy:2375
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN}
     networks:
       - internal
     healthcheck:

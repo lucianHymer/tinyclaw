@@ -49,9 +49,11 @@ while true; do
         continue
     fi
 
-    THREAD_COUNT=0
+    THREAD_COUNT=$(echo "$THREAD_IDS" | wc -w)
+    STAGGER_SLEEP=$((INTERVAL / THREAD_COUNT))
     EPOCH_MS=$(date +%s)000
 
+    CURRENT_THREAD=0
     for THREAD_ID in $THREAD_IDS; do
         MESSAGE_ID="heartbeat_${THREAD_ID}_$(date +%s)_$$"
 
@@ -69,10 +71,16 @@ while true; do
           > "$QUEUE_INCOMING/${MESSAGE_ID}.json"
 
         log "Heartbeat queued for thread $THREAD_ID: $MESSAGE_ID"
-        THREAD_COUNT=$((THREAD_COUNT + 1))
+        CURRENT_THREAD=$((CURRENT_THREAD + 1))
+
+        # Stagger: sleep between thread iterations to prevent queue flooding
+        if [ "$CURRENT_THREAD" -lt "$THREAD_COUNT" ]; then
+            log "Stagger: sleeping ${STAGGER_SLEEP}s before next thread"
+            sleep "$STAGGER_SLEEP"
+        fi
     done
 
-    log "Heartbeat cycle complete: $THREAD_COUNT thread(s) queued"
+    log "Heartbeat cycle complete: $CURRENT_THREAD thread(s) queued"
 
     # Optional: wait 30s and check for HEARTBEAT_OK responses to clean up
     sleep 30
