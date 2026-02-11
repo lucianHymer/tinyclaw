@@ -624,20 +624,21 @@ async function processMessage(messageFile: string): Promise<void> {
       const q = query({ prompt: fullPrompt, options });
 
       // Emit initial "Thinking..." status immediately
-      writeStatus(messageId, "🕐 Thinking...");
+      const statusStartTime = Date.now();
+      writeStatus(messageId, "🕐 Thinking... (0s)");
 
       const observer: QueryEventObserver = {
         onToolUse(toolName: string) {
-          writeStatus(messageId, `🕐 Using ${toolName}...`);
+          const elapsed = Math.round((Date.now() - statusStartTime) / 1000);
+          writeStatus(messageId, `🕐 Using ${toolName}... (${elapsed}s)`);
         },
-        onToolProgress(toolName: string, elapsedSeconds: number) {
-          writeStatus(
-            messageId,
-            `🕐 Using ${toolName}... (${Math.round(elapsedSeconds)}s)`,
-          );
+        onToolProgress(toolName: string, _elapsedSeconds: number) {
+          const elapsed = Math.round((Date.now() - statusStartTime) / 1000);
+          writeStatus(messageId, `🕐 Using ${toolName}... (${elapsed}s)`);
         },
         onCompacting() {
-          writeStatus(messageId, "🕐 Compacting context...");
+          const elapsed = Math.round((Date.now() - statusStartTime) / 1000);
+          writeStatus(messageId, `🕐 Compacting context... (${elapsed}s)`);
         },
       };
 
