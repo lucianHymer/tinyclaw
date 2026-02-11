@@ -53,6 +53,7 @@ RUN mkdir -p /home/node/.claude && \
 
 # Configure git for the node user
 USER node
-RUN git config --global credential.helper /usr/local/bin/github-token-helper
+RUN git config --global credential.helper /usr/local/bin/github-token-helper && \
+    git config --global credential.useHttpPath true
 
 ENTRYPOINT ["./entrypoint.sh"]

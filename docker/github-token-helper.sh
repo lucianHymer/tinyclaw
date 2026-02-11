@@ -9,11 +9,22 @@ if [ "$1" != "get" ]; then
 fi
 
 # Parse git's credential request from stdin
+ORG=""
 while IFS='=' read -r key value; do
   case "$key" in
     path) ORG="${value%%/*}" ;;
   esac
 done
+
+# Fallback: if git didn't send path (credential.useHttpPath not set),
+# use the first org in github-installations.json
+if [ -z "$ORG" ]; then
+  ORG=$(jq -r 'keys[0] // empty' /secrets/github-installations.json 2>/dev/null || true)
+fi
+
+if [ -z "$ORG" ]; then
+  exit 1  # No org available from path or installations
+fi
 
 # Look up installation ID for this org
 INSTALL_ID=$(jq -r --arg org "$ORG" '.[$org] // empty' /secrets/github-installations.json 2>/dev/null)
