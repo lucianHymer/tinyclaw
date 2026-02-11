@@ -118,30 +118,6 @@ cmd_logs() {
     esac
 }
 
-cmd_install() {
-    echo -e "${BLUE}Installing systemd service...${NC}"
-
-    local src="$SCRIPT_DIR/systemd/tinyclaw.service"
-    if [ ! -f "$src" ]; then
-        echo -e "${RED}Missing $src${NC}"
-        return 1
-    fi
-
-    local user
-    user=$(whoami)
-
-    sed "s|__USER__|$user|g;s|__WORKING_DIR__|$SCRIPT_DIR|g" \
-        "$src" | sudo tee "/etc/systemd/system/tinyclaw.service" > /dev/null
-
-    sudo systemctl daemon-reload
-    sudo systemctl enable tinyclaw.service
-
-    echo -e "${GREEN}Systemd service installed and enabled${NC}"
-    echo "  Start:   sudo systemctl start tinyclaw"
-    echo "  Status:  sudo systemctl status tinyclaw"
-    echo "  Logs:    journalctl -f -u tinyclaw"
-}
-
 cmd_send() {
     local message="${2:-}"
     if [ -z "$message" ]; then
@@ -299,7 +275,6 @@ cmd_help() {
     echo "  status                 Show container status and resource usage"
     echo "  logs [service]         Follow logs (bot|broker|dashboard|cloudflared|all)"
     echo "  build                  Build Docker images"
-    echo "  install                Install systemd unit for auto-start on boot"
     echo "  send <msg>             Send a CLI message to the queue (thread 1)"
     echo "  migrate                Copy local .tinyclaw/ data into Docker volume"
     echo "  model [sonnet|opus]    Show or switch the Claude model"
@@ -318,7 +293,6 @@ case "${1:-}" in
     status)     cmd_status ;;
     logs)       cmd_logs "$@" ;;
     build)      shift; cmd_build "$@" ;;
-    install)    cmd_install ;;
     send)       cmd_send "$@" ;;
     migrate)    cmd_migrate ;;
     model)      cmd_model "$@" ;;
