@@ -24,6 +24,8 @@ Transform the current minimal heartbeat ("any pending tasks?") into a tiered mon
 
 **Key constraint — heartbeats are one-shot:** Each heartbeat fires a fresh query with no persistent session (currently haiku model). The agent has no memory between pulses except what it writes to HEARTBEAT.md. This is the design: HEARTBEAT.md is both task list and state store (last fetch time, last daily report timestamp, etc.). Quick checks stay on haiku; daily checks that need `gh api` calls or cross-repo reasoning may need sonnet.
 
+The current time and timezone should be made SUPER CLEAR to the heartbeat agent, and it should be thoroughly told to think twice about time comparisons.
+
 **Implementation approach:** The heartbeat prompt (`buildHeartbeatPrompt` in session-manager.ts) gets significantly richer. No code changes to the heartbeat cron itself -- all intelligence lives in the prompt and HEARTBEAT.md.
 
 ### 2. Master Thread as Organizational Brain
@@ -78,7 +80,7 @@ Hetzner Box (32GB RAM upgrade)
 - **Anthropic API credentials:** Each dev uses their own Claude Max plan. They run `claude login` once inside their container.
 - **GitHub credentials:** Provided automatically via the existing credential broker. Dev containers join the same Docker network (`internal`) and use the same `github-token-helper.sh` / `gh-wrapper.sh` scripts.
 - **SSH access:** Each container runs sshd on a unique port (2201, 2202, ...). Devs get shell aliases: `alias claude-dev='ssh -p 2201 me@hetzner-box'`. Also works with VS Code Remote SSH for devs who want an IDE experience.
-- **Resource limits:** ~1GB RAM limit per container (idle ~200MB, active Claude session ~500MB-1GB). 32GB box supports TinyClaw (~2.5GB) + 10 idle containers + 3-5 concurrent active sessions.
+- **Resource limits:** Docker cgroup hard limits per container, no swap on the host (swap causes thrashing -- no swap means fast clean OOM kills scoped to the offending container). Current 8GB box: bot at 4GB, dev containers at 4GB each. At 32GB: bot at 6-8GB, dev containers at 3GB default. Use `docker update --memory` to burst individual containers when needed. Dashboard provides a live memory rebalancing UI (see section 4).
 - **Repo access:** Any repo the GitHub App has access to. Safety comes from repository rulesets (audited by heartbeat).
 - **Isolation:** Each container is its own filesystem. Devs can't see each other's containers. SSH keys control access.
 
@@ -94,6 +96,27 @@ Hetzner Box (32GB RAM upgrade)
 - Shell alias to add to `.zshrc`/`.bashrc`
 - SSH config snippet
 - One-pager: "Your first 10 minutes with Claude Code"
+
+### 4. Live Memory Rebalancing Dashboard
+
+A new page on the existing TinyClaw dashboard that shows real-time memory usage per container and lets you rebalance limits on the fly.
+
+**What it shows:**
+- Host total RAM and current usage
+- Per-container: current memory usage vs. hard limit (bar chart or slider)
+- Which containers are idle vs. active (helps decide who to borrow from)
+
+**What it does:**
+- Drag sliders or input new limits per container
+- Validates that the sum of all limits doesn't exceed host RAM (minus ~2GB for OS)
+- Applies changes via `docker update --memory` (live, no restart)
+- Posts a notification to the Telegram general channel when limits are adjusted (e.g., "Memory rebalanced: dev-alice raised to 8GB, dev-bob lowered to 2GB")
+
+**Implementation notes:**
+- The dashboard container needs access to the Docker socket (`/var/run/docker.sock`) to read container stats and run `docker update`
+- Uses the Docker Engine API: `GET /containers/{id}/stats` for live usage, `POST /containers/{id}/update` for limit changes
+- The existing dashboard already reads host metrics from `/proc` -- this extends that pattern
+- Notification to Telegram goes through the existing queue system (write JSON to `.tinyclaw/queue/incoming/` targeting the general thread)
 
 ---
 
@@ -118,6 +141,8 @@ Hetzner Box (32GB RAM upgrade)
 5. **SSH access per container** on unique ports with shell aliases for easy connection
 6. **Repository ruleset audit** added to heartbeat as a safety guardrail
 7. **Thread-to-master reporting** is daily, opt-in (only if something changed), via existing `send_message` MCP tool
+8. **No swap on host** -- cgroup hard limits per container, fast OOM kills scoped to offending container only
+9. **Live memory rebalancing** via dashboard UI -- `docker update` for burst, Telegram notification on changes
 
 ---
 
