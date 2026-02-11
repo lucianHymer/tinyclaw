@@ -183,9 +183,26 @@ When you receive daily summaries from worker threads:
 
 When asked about project status, read active-projects.md first.
 
-You receive periodic heartbeat messages. Read HEARTBEAT.md in your working directory
-and follow it. You can edit HEARTBEAT.md to maintain your own task list. Reply
-HEARTBEAT_OK if nothing needs attention.
+## Heartbeat Self-Management
+
+You receive periodic heartbeat messages (~8 min interval). Your working directory has a
+HEARTBEAT.md file — your complete operational playbook for this repo.
+
+HEARTBEAT.md has per-tier task sections (Quick Tasks, Hourly Tasks, Daily Tasks).
+Every check the heartbeat performs is listed explicitly in this file.
+
+You own this file. Evolve it as you learn about this repo:
+- Add tasks when you notice recurring issues or patterns specific to this repo
+- Check off completed tasks, remove irrelevant ones
+- Put the right tasks in the right tier:
+  - Quick Tasks: fast checks (< 10 seconds) — git status, file existence, flag checks
+  - Hourly Tasks: moderate checks — git fetch, CI status, upstream changes
+  - Daily Tasks: thorough checks — PR reviews, stale branch cleanup, daily summaries
+- Use "Urgent Flags" for anything needing human attention (blockers, broken CI, security)
+- Keep "Notes" as scratch space for context between heartbeats
+
+You can update HEARTBEAT.md anytime — during heartbeats or during normal conversation.
+Reply HEARTBEAT_OK during heartbeats if nothing needs attention (suppresses Telegram delivery).
 
 ## MCP Tools
 
@@ -227,9 +244,26 @@ You have these MCP tools available (use them via the tinyclaw MCP server):
 - \`list_threads\` — List all active threads with IDs, names, and working directories
 - \`query_knowledge_base\` — Read context.md, decisions.md, or active-projects.md from the knowledge base
 
-You receive periodic heartbeat messages. Read HEARTBEAT.md in your working directory
-and follow it. You can edit HEARTBEAT.md to maintain your own task list. Reply
-HEARTBEAT_OK if nothing needs attention.
+## Heartbeat Self-Management
+
+You receive periodic heartbeat messages (~8 min interval). Your working directory has a
+HEARTBEAT.md file — your complete operational playbook for this repo.
+
+HEARTBEAT.md has per-tier task sections (Quick Tasks, Hourly Tasks, Daily Tasks).
+Every check the heartbeat performs is listed explicitly in this file.
+
+You own this file. Evolve it as you learn about this repo:
+- Add tasks when you notice recurring issues or patterns specific to this repo
+- Check off completed tasks, remove irrelevant ones
+- Put the right tasks in the right tier:
+  - Quick Tasks: fast checks (< 10 seconds) — git status, file existence, flag checks
+  - Hourly Tasks: moderate checks — git fetch, CI status, upstream changes
+  - Daily Tasks: thorough checks — PR reviews, stale branch cleanup, daily summaries
+- Use "Urgent Flags" for anything needing human attention (blockers, broken CI, security)
+- Keep "Notes" as scratch space for context between heartbeats
+
+You can update HEARTBEAT.md anytime — during heartbeats or during normal conversation.
+Reply HEARTBEAT_OK during heartbeats if nothing needs attention (suppresses Telegram delivery).
 
 Keep responses concise — Telegram messages over 4000 characters get split.${runtimeBlock}`;
 }
@@ -268,68 +302,61 @@ You must read HEARTBEAT.md in your working directory (${config.cwd}). If HEARTBE
 - Last daily: (never)
 
 ## Urgent Flags
-(none)
+(none — flag anything needing human attention here)
 
-## Tasks
-- [ ] Review pending items
+## Quick Tasks (every heartbeat)
+- [ ] Run \\\`git status\\\` — check for uncommitted changes or untracked files
+- [ ] Check Urgent Flags above — if anything is flagged, report it
+
+## Hourly Tasks (when >60 min since last hourly)
+- [ ] Run \\\`git fetch origin\\\` — detect upstream changes
+- [ ] Run \\\`git log HEAD..origin/main --oneline\\\` — check for new commits on main
+- [ ] Run \\\`gh pr list --state open\\\` and \\\`gh pr checks\\\` — check CI status on open PRs
+- [ ] Check for merge conflicts with main
+
+## Daily Tasks (when >24 hours since last daily)
+- [ ] Summarize the day's work (\\\`git log --since="24 hours ago" --oneline\\\`)
+- [ ] Run \\\`gh pr list --state open\\\` — check PR status (open, draft, review requested)
+- [ ] Run \\\`gh issue list\\\` — check for new or aging items
+- [ ] Flag stale branches (>7 days without commits)
+- [ ] Send daily summary to master thread (threadId: 1) via send_message
+- [ ] Review all tier task lists — prune irrelevant tasks, evolve checks based on what you've learned
 
 ## Notes
-(agent scratch space)
+(scratch space — observations, ideas, context for future heartbeats)
 \`\`\`
 
-Read the timestamps from HEARTBEAT.md and compare them to the current time to determine which tier of checks are due. Perform ALL checks for the highest due tier (higher tiers include all lower tier checks).
+Read HEARTBEAT.md. Compare the timestamps to the current time to determine which tier is due.
+Execute ALL tasks for the highest due tier (higher tiers include all lower tier tasks).
 
-## Quick Tier (every heartbeat)
-Always perform these checks:
-1. Run \`git status\` to check for uncommitted changes or untracked files
-2. Check the "Urgent Flags" section of HEARTBEAT.md for anything flagged
-3. Update the "Last quick" timestamp in HEARTBEAT.md to: ${isoNow}
-4. If nothing needs attention, reply with exactly: HEARTBEAT_OK
+The current time is ${now} (${isoNow}).
 
-## Hourly Tier (if >60 minutes since "Last hourly" timestamp)
-Perform all Quick checks, PLUS:
-1. Run \`git fetch origin\` to detect upstream changes
-2. Run \`git log HEAD..origin/main --oneline\` to see new commits on main
-3. Run \`gh pr list --state open\` and for any open PRs run \`gh pr checks\` to check CI status
-4. Check for merge conflicts with main: \`git merge-tree $(git merge-base HEAD origin/main) HEAD origin/main\`
-5. Update the "Last hourly" timestamp in HEARTBEAT.md to: ${isoNow}
-6. Report anything notable. If nothing needs attention, reply with exactly: HEARTBEAT_OK
+For each tier you execute:
+1. Work through every task in that tier's section
+2. Check off items you've verified or completed (change \`[ ]\` to \`[x]\`)
+3. If a task is no longer relevant to this repo, remove it
+4. If you notice something that should be a recurring check, add it to the right tier
+5. Update the tier's timestamp when done
 
-## Daily Tier (if >24 hours since "Last daily" timestamp)
-Perform all Hourly checks, PLUS:
+## Tier Rules
+- Quick Tasks: always execute
+- Hourly Tasks: execute if >60 minutes since "Last hourly" or "(never)"
+- Daily Tasks: execute if >24 hours since "Last daily" or "(never)"
+- "(never)" means the check has NEVER been run — it is due immediately
 
 Active threads in the system: ${threadInventory}
 
-1. Summarize the day's work by running \`git log --since="24 hours ago" --oneline\` and reviewing HEARTBEAT.md tasks
-2. Run \`gh pr list --state open\` to get current PR status (open, draft, review requested)
-3. Run \`gh issue list\` to check for new or aging items
-4. Flag any stale branches (>7 days without commits): \`git branch -r --sort=-committerdate --format='%(committerdate:relative) %(refname:short)'\`
-5. Compile a daily summary and send it to the master thread (threadId: 1) using the \`send_message\` MCP tool. The summary MUST include:
-   - **What was worked on:** key commits from git log (with brief descriptions)
-   - **PR status:** any open PRs, their CI status, review state
-   - **Blockers:** anything stuck, failing, or needing human attention
-   - **Stale branches:** any branches flagged in step 4
-   - If there were NO commits in the last 24 hours and no open PRs, skip sending the summary
-6. Update the "Last daily" timestamp in HEARTBEAT.md to: ${isoNow}
-7. After sending the daily summary to the master thread, reply with exactly: HEARTBEAT_OK (this suppresses local delivery since the summary was sent to the master thread)
-
-## Timestamp Comparison Rules
-- "(never)" means the check has NEVER been run — it is due immediately
-- Compare the stored ISO timestamp to the current time: ${now} (${isoNow})
-- If "Last hourly" is more than 60 minutes ago or "(never)", the hourly tier is due
-- If "Last daily" is more than 24 hours ago or "(never)", the daily tier is due
-
-## Important
-- Always update timestamps AFTER completing the checks for that tier
-- Reply HEARTBEAT_OK if nothing needs attention (this suppresses the message from being sent to Telegram)
-- If something needs attention, describe it clearly in your response — it will be sent to the Telegram thread
-- To report to other threads, write JSON messages to .tinyclaw/queue/outgoing/ with the targetThreadId field
-- You can edit the Tasks and Notes sections of HEARTBEAT.md freely as your own scratch space`
+## After executing
+- Update timestamps AFTER completing each tier's checks
+- Reply HEARTBEAT_OK if nothing needs attention (suppresses Telegram delivery)
+- If something needs attention, describe it clearly — it will be sent to the thread
+- You can edit any section of HEARTBEAT.md freely — it's your operational playbook
+- To report to other threads, use the \`send_message\` MCP tool with the target threadId`
 
     + (config.isMaster ? `
 
 ## Master Thread Daily Extras (applies to Daily Tier only)
-As the master thread, you do NOT send a daily summary to yourself. Instead, skip step 5 of the Daily Tier above (sending via send_message). Your daily responsibilities are:
+As the master thread, you do NOT send a daily summary to yourself. Instead, your "Send daily summary to master thread" task in HEARTBEAT.md should be replaced with the responsibilities below. Your daily responsibilities are:
 
 1. **Aggregate thread reports:** Check .tinyclaw/queue/incoming/ for any unprocessed daily summaries from worker threads. Read and incorporate them into active-projects.md in your knowledge base. Commit after updating: \`git add -A && git commit -m "Update: daily report aggregation"\`
 2. **Surface items needing human attention:** After reviewing all thread reports and your own checks, compile a list of anything across ALL threads that needs human intervention:
@@ -338,7 +365,28 @@ As the master thread, you do NOT send a daily summary to yourself. Instead, skip
    - Threads reporting blockers
    - Stale branches or abandoned work
    If there are items needing attention, include them in your response (do NOT reply HEARTBEAT_OK — let the message reach Telegram so the human sees it).
-3. **Thread health overview:** Note any threads that have NOT sent a daily report in the last 24 hours (they may be idle or have a broken heartbeat). Active threads: ${threadInventory}` : "")
+3. **Thread health overview:** Note any threads that have NOT sent a daily report in the last 24 hours (they may be idle or have a broken heartbeat). Active threads: ${threadInventory}
+4. **Cross-pollinate heartbeat patterns:** Read HEARTBEAT.md from each active worker
+   thread's working directory (construct path from threads.json: {thread.cwd}/HEARTBEAT.md).
+   Look for:
+   - Useful tasks that could benefit other repos
+   - Good patterns one thread developed that others haven't adopted
+   - Important checks that a thread is missing (e.g., no git status in Quick Tasks)
+   - Tasks in the wrong tier (slow check in Quick Tasks, etc.)
+
+   If you find a pattern worth sharing, send a message to the target thread(s) via
+   \`send_message\`: "Cross-pollination suggestion: consider adding '{task}' to your
+   {tier} Tasks in HEARTBEAT.md. Thread {N} ({name}) found this useful because {reason}."
+
+   Workers will evaluate the suggestion for their repo — they may accept or ignore it.
+   Log propagated patterns in decisions.md.
+   Do NOT directly edit other threads' HEARTBEAT.md files.
+
+When creating your own HEARTBEAT.md, add these master-specific items to your Daily Tasks section:
+- [ ] Aggregate worker thread daily summaries into active-projects.md
+- [ ] Surface items needing human attention across all threads
+- [ ] Check thread health — flag threads missing daily reports
+- [ ] Cross-pollinate: review worker HEARTBEAT.md files for shareable patterns` : "")
     ;
 }
 

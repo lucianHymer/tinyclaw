@@ -238,6 +238,7 @@ function logPrompt(entry: {
 let activeCount = 0;
 const activeThreads = new Set<number>();
 let scanning = false;
+let activeHeartbeatCount = 0;
 
 // ─── SDK canUseTool Adapter ───
 
@@ -868,7 +869,13 @@ async function processQueue(): Promise<void> {
         path: path.join(QUEUE_INCOMING, f),
         time: fs.statSync(path.join(QUEUE_INCOMING, f)).mtimeMs,
       }))
-      .sort((a, b) => a.time - b.time);
+      .sort((a, b) => {
+        const aHB = a.name.startsWith('heartbeat_');
+        const bHB = b.name.startsWith('heartbeat_');
+        if (aHB && !bHB) return 1;   // heartbeats go to back
+        if (!aHB && bHB) return -1;  // user messages jump ahead
+        return a.time - b.time;      // within same priority, FIFO
+      });
 
     if (files.length > 0) {
       log(
@@ -891,9 +898,13 @@ async function processQueue(): Promise<void> {
       // Only one message per thread at a time (SDK sessions aren't concurrent)
       if (activeThreads.has(msg.threadId)) continue;
 
+      // Only 1 heartbeat can process concurrently — reserve other slots for user messages
+      if (msg.source === 'heartbeat' && activeHeartbeatCount >= 1) continue;
+
       // Claim the slot
       activeCount++;
       activeThreads.add(msg.threadId);
+      if (msg.source === 'heartbeat') activeHeartbeatCount++;
 
       log(
         "INFO",
@@ -904,6 +915,7 @@ async function processQueue(): Promise<void> {
       processMessage(file.path).finally(() => {
         activeCount--;
         activeThreads.delete(msg.threadId);
+        if (msg.source === 'heartbeat') activeHeartbeatCount--;
         // Re-scan queue for more work
         void processQueue();
       });
