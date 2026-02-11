@@ -26,10 +26,11 @@ const QUEUE_INCOMING = path.join(SCRIPT_DIR, ".tinyclaw/queue/incoming");
 const QUEUE_OUTGOING = path.join(SCRIPT_DIR, ".tinyclaw/queue/outgoing");
 const LOG_FILE = path.join(SCRIPT_DIR, ".tinyclaw/logs/telegram.log");
 const MESSAGE_MODELS_FILE = path.join(SCRIPT_DIR, ".tinyclaw/message-models.json");
+const QUEUE_STATUS = path.join(SCRIPT_DIR, ".tinyclaw/status");
 
 // ─── Ensure Directories Exist ───
 
-[QUEUE_INCOMING, QUEUE_OUTGOING, path.dirname(LOG_FILE), path.dirname(MESSAGE_MODELS_FILE)].forEach(
+[QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_STATUS, path.dirname(LOG_FILE), path.dirname(MESSAGE_MODELS_FILE)].forEach(
     (dir) => {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
@@ -99,6 +100,8 @@ interface PendingMessage {
     chatId: number;
     threadId: number;
     telegramMessageId: number;
+    statusMessageId?: number;
+    lastStatusText?: string;
 }
 
 const pendingMessages = new Map<string, PendingMessage>();
@@ -328,15 +331,55 @@ async function pollOutgoingQueue(): Promise<void> {
                     const pending = pendingMessages.get(data.messageId);
 
                     if (pending) {
-                        const chunks = splitMessage(data.message);
+                        // Delete status file FIRST to prevent pollStatusFiles from overwriting final response
+                        try {
+                            const statusFile = path.join(QUEUE_STATUS, `${data.messageId}.json`);
+                            fs.unlinkSync(statusFile);
+                        } catch { /* may not exist */ }
 
-                        for (const chunk of chunks) {
-                            const sent = await pending.ctx.reply(chunk, {
-                                message_thread_id: pending.ctx.msg?.message_thread_id,
-                            });
+                        const chunks = splitMessage(data.message);
+                        let firstSentId: number | undefined;
+
+                        if (pending.statusMessageId && chunks.length > 0) {
+                            // Edit the status message in-place with the first chunk
+                            try {
+                                await bot.api.editMessageText(
+                                    pending.chatId,
+                                    pending.statusMessageId,
+                                    chunks[0],
+                                );
+                                firstSentId = pending.statusMessageId;
+                            } catch {
+                                // Status message may have been deleted — send normally instead
+                                firstSentId = undefined;
+                            }
+                        }
+
+                        if (firstSentId) {
+                            // First chunk was edited in-place — store model and react
                             if (data.model) {
-                                storeMessageModel(sent.message_id, data.model);
-                                await reactWithModel(pending.chatId, sent.message_id, data.model);
+                                storeMessageModel(firstSentId, data.model);
+                                await reactWithModel(pending.chatId, firstSentId, data.model);
+                            }
+                            // Send remaining chunks as new messages
+                            for (let i = 1; i < chunks.length; i++) {
+                                const sent = await pending.ctx.reply(chunks[i], {
+                                    message_thread_id: pending.ctx.msg?.message_thread_id,
+                                });
+                                if (data.model) {
+                                    storeMessageModel(sent.message_id, data.model);
+                                }
+                            }
+                        } else {
+                            // No status message or edit failed — send all chunks normally
+                            for (const chunk of chunks) {
+                                const sent = await pending.ctx.reply(chunk, {
+                                    message_thread_id: pending.ctx.msg?.message_thread_id,
+                                });
+                                if (data.model) {
+                                    storeMessageModel(sent.message_id, data.model);
+                                    await reactWithModel(pending.chatId, sent.message_id, data.model);
+                                }
                             }
                         }
 
@@ -387,8 +430,62 @@ function cleanupPendingMessages(): void {
         const timestamp = parseInt(parts[0], 10);
 
         if (now - timestamp > timeout) {
+            // Delete Telegram status message if it exists
+            if (pending.statusMessageId) {
+                bot.api.deleteMessage(pending.chatId, pending.statusMessageId).catch(() => {});
+            }
+            // Delete status file if it exists
+            try {
+                const statusFile = path.join(QUEUE_STATUS, `${messageId}.json`);
+                if (fs.existsSync(statusFile)) fs.unlinkSync(statusFile);
+            } catch { /* best effort */ }
+
             pendingMessages.delete(messageId);
             log("DEBUG", `Cleaned up stale pending message: ${messageId}`);
+        }
+    }
+}
+
+// ─── Status File Polling ───
+
+async function pollStatusFiles(): Promise<void> {
+    for (const [messageId, pending] of pendingMessages) {
+        const statusFile = path.join(QUEUE_STATUS, `${messageId}.json`);
+
+        let statusData: { text: string; ts: number };
+        try {
+            if (!fs.existsSync(statusFile)) continue;
+            statusData = JSON.parse(fs.readFileSync(statusFile, "utf8"));
+        } catch {
+            continue; // File may be mid-write or already deleted
+        }
+
+        if (statusData.text === pending.lastStatusText) continue;
+
+        try {
+            if (pending.statusMessageId) {
+                // Edit existing status message
+                await bot.api.editMessageText(
+                    pending.chatId,
+                    pending.statusMessageId,
+                    statusData.text,
+                );
+                pending.lastStatusText = statusData.text;
+            } else {
+                // Send new status message as reply to original
+                const sent = await bot.api.sendMessage(
+                    pending.chatId,
+                    statusData.text,
+                    {
+                        message_thread_id: pending.ctx.msg?.message_thread_id,
+                        reply_parameters: { message_id: pending.telegramMessageId },
+                    },
+                );
+                pending.statusMessageId = sent.message_id;
+                pending.lastStatusText = statusData.text;
+            }
+        } catch {
+            // editMessageText may fail if message was deleted or content unchanged — ignore
         }
     }
 }
@@ -430,6 +527,9 @@ setInterval(sendTypingForPending, 4000);
 
 // Clean up stale pending messages every 60 seconds
 setInterval(cleanupPendingMessages, 60_000);
+
+// Poll status files every 2 seconds for tool use visibility
+setInterval(pollStatusFiles, 2000);
 
 bot.start({
     onStart: async () => {

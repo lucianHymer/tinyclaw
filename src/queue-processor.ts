@@ -12,7 +12,9 @@ import path from "path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
     SDKMessage,
+    SDKAssistantMessage,
     SDKResultMessage,
+    SDKToolProgressMessage,
     Options,
     Query,
     CanUseTool as SDKCanUseTool,
@@ -50,6 +52,7 @@ const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
 const QUEUE_PROCESSING = path.join(TINYCLAW_DIR, "queue/processing");
 const QUEUE_DEAD_LETTER = path.join(TINYCLAW_DIR, "queue/dead-letter");
 const QUEUE_COMMANDS = path.join(TINYCLAW_DIR, "queue/commands");
+const QUEUE_STATUS = path.join(TINYCLAW_DIR, "status");
 const LOG_FILE = path.join(TINYCLAW_DIR, "logs/queue.log");
 const ROUTING_LOG = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
 const PROMPTS_LOG = path.join(TINYCLAW_DIR, "logs/prompts.jsonl");
@@ -58,7 +61,7 @@ const MAX_PROMPTS_LOG_SIZE = 10 * 1024 * 1024; // 10MB
 
 // ─── Ensure queue directories exist ───
 
-[QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING, QUEUE_DEAD_LETTER, QUEUE_COMMANDS, path.dirname(LOG_FILE)].forEach(
+[QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING, QUEUE_DEAD_LETTER, QUEUE_COMMANDS, QUEUE_STATUS, path.dirname(LOG_FILE)].forEach(
     (dir) => {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
@@ -211,6 +214,30 @@ function buildSourcePrefix(msg: IncomingMessage): string {
     return prefixMap[msg.source ?? "user"];
 }
 
+// ─── Status File Helpers ───
+
+function writeStatus(messageId: string, text: string): void {
+    try {
+        const statusFile = path.join(QUEUE_STATUS, `${messageId}.json`);
+        const tmpFile = statusFile + ".tmp";
+        fs.writeFileSync(tmpFile, JSON.stringify({ text, ts: Date.now() }));
+        fs.renameSync(tmpFile, statusFile);
+    } catch {
+        // Status updates are best-effort — never crash the process
+    }
+}
+
+function clearStatus(messageId: string): void {
+    try {
+        const statusFile = path.join(QUEUE_STATUS, `${messageId}.json`);
+        if (fs.existsSync(statusFile)) {
+            fs.unlinkSync(statusFile);
+        }
+    } catch {
+        // Best-effort cleanup
+    }
+}
+
 // ─── Build v1 query options ───
 
 function buildQueryOptions(
@@ -245,8 +272,15 @@ function buildQueryOptions(
 
 // ─── Collect full response text from query stream ───
 
+interface QueryEventObserver {
+    onToolUse?(toolName: string): void;
+    onToolProgress?(toolName: string, elapsedSeconds: number): void;
+    onCompacting?(): void;
+}
+
 async function collectQueryResponse(
     q: Query,
+    observer?: QueryEventObserver,
 ): Promise<{ text: string; sessionId: string | undefined }> {
     const parts: string[] = [];
     let capturedSessionId: string | undefined;
@@ -258,14 +292,26 @@ async function collectQueryResponse(
         }
 
         if (msg.type === "assistant") {
-            const content = (msg as any).message?.content;
+            const content = (msg as SDKAssistantMessage).message?.content;
             if (Array.isArray(content)) {
                 for (const block of content) {
                     if (block.type === "text" && typeof block.text === "string") {
                         parts.push(block.text);
                     }
+                    if (block.type === "tool_use" && "name" in block) {
+                        observer?.onToolUse?.(block.name);
+                    }
                 }
             }
+        }
+
+        if (msg.type === "tool_progress") {
+            const toolMsg = msg as SDKToolProgressMessage;
+            observer?.onToolProgress?.(toolMsg.tool_name, toolMsg.elapsed_time_seconds);
+        }
+
+        if (msg.type === "system" && "subtype" in msg && msg.subtype === "status" && "status" in msg && msg.status === "compacting") {
+            observer?.onCompacting?.();
         }
 
         if (msg.type === "result") {
@@ -465,8 +511,23 @@ async function processMessage(messageFile: string): Promise<void> {
             const options = buildQueryOptions(threadId, threadConfig, effectiveModel);
             const q = query({ prompt: fullPrompt, options });
 
+            // Emit initial "Thinking..." status immediately
+            writeStatus(messageId, "🕐 Thinking...");
+
+            const observer: QueryEventObserver = {
+                onToolUse(toolName: string) {
+                    writeStatus(messageId, `🕐 Using ${toolName}...`);
+                },
+                onToolProgress(toolName: string, elapsedSeconds: number) {
+                    writeStatus(messageId, `🕐 Using ${toolName}... (${Math.round(elapsedSeconds)}s)`);
+                },
+                onCompacting() {
+                    writeStatus(messageId, "🕐 Compacting context...");
+                },
+            };
+
             try {
-                const { text, sessionId: newSessionId } = await collectQueryResponse(q);
+                const { text, sessionId: newSessionId } = await collectQueryResponse(q, observer);
                 responseText = text.trim();
 
                 // Persist session ID for future resume
@@ -538,6 +599,8 @@ async function processMessage(messageFile: string): Promise<void> {
         fs.writeFileSync(tmpFile, JSON.stringify(responseData, null, 2));
         fs.renameSync(tmpFile, responseFile);
 
+        clearStatus(messageId);
+
         log(
             "INFO",
             `Response ready [${channel}] thread=${threadId} model=${effectiveModel} (${responseText.length} chars)`,
@@ -549,6 +612,7 @@ async function processMessage(messageFile: string): Promise<void> {
         }
     } catch (error) {
         log("ERROR", `Processing error for ${filename}: ${toErrorMessage(error)}`);
+        clearStatus(messageId);
         handleRetry(processingFile, filename, retryCount);
     }
 }
