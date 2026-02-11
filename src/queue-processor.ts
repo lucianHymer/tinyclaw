@@ -149,9 +149,11 @@ function logPrompt(entry: {
     }
 }
 
-// ─── Concurrency Guard ───
+// ─── Concurrency Control ───
 
-let processing = false;
+let activeCount = 0;
+const activeThreads = new Set<number>();
+let scanning = false;
 
 // ─── SDK canUseTool Adapter ───
 
@@ -633,8 +635,11 @@ interface QueueFile {
 }
 
 async function processQueue(): Promise<void> {
-    if (processing) return;
-    processing = true;
+    const maxConcurrent = loadSettings().max_concurrent_sessions;
+
+    if (activeCount >= maxConcurrent) return;
+    if (scanning) return;
+    scanning = true;
 
     try {
         await processCommands();
@@ -650,16 +655,41 @@ async function processQueue(): Promise<void> {
             .sort((a, b) => a.time - b.time);
 
         if (files.length > 0) {
-            log("DEBUG", `Found ${files.length} message(s) in queue`);
+            log("DEBUG", `Found ${files.length} message(s) in queue (active: ${activeCount}/${maxConcurrent})`);
         }
 
         for (const file of files) {
-            await processMessage(file.path);
+            if (activeCount >= maxConcurrent) break;
+
+            // Peek at message to get threadId for per-thread serialization
+            let msg: IncomingMessage;
+            try {
+                msg = JSON.parse(fs.readFileSync(file.path, "utf8")) as IncomingMessage;
+            } catch {
+                continue; // File may have been picked up by a concurrent scan
+            }
+
+            // Only one message per thread at a time (SDK sessions aren't concurrent)
+            if (activeThreads.has(msg.threadId)) continue;
+
+            // Claim the slot
+            activeCount++;
+            activeThreads.add(msg.threadId);
+
+            log("INFO", `Dispatching thread=${msg.threadId} (active: ${activeCount}/${maxConcurrent})`);
+
+            // Fire off processing — don't await, allow parallel execution
+            processMessage(file.path).finally(() => {
+                activeCount--;
+                activeThreads.delete(msg.threadId);
+                // Re-scan queue for more work
+                void processQueue();
+            });
         }
     } catch (error) {
         log("ERROR", `Queue scan error: ${toErrorMessage(error)}`);
     } finally {
-        processing = false;
+        scanning = false;
     }
 }
 
@@ -671,7 +701,7 @@ async function shutdown(signal: string): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    log("INFO", `Received ${signal}. Shutting down...`);
+    log("INFO", `Received ${signal}. Shutting down... (${activeCount} active session(s))`);
 
     clearInterval(queueInterval);
 
@@ -696,13 +726,14 @@ process.on("SIGTERM", () => {
 
 // ─── Startup ───
 
-log("INFO", "Queue processor started (Agent SDK v1 query API + smart routing)");
+const startupSettings = loadSettings();
+log("INFO", `Queue processor started (Agent SDK v1 query API + smart routing, max concurrent: ${startupSettings.max_concurrent_sessions})`);
 log("INFO", `Watching: ${QUEUE_INCOMING}`);
 
 // fs.watch for near-instant pickup
 try {
     fs.watch(QUEUE_INCOMING, { persistent: false }, (_eventType, filename) => {
-        if (filename && filename.endsWith(".json") && !processing) {
+        if (filename && filename.endsWith(".json")) {
             void processQueue();
         }
     });
