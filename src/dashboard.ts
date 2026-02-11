@@ -11,7 +11,7 @@ import http from "http";
 const SCRIPT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
 const STATIC_DIR = path.join(SCRIPT_DIR, "static");
-const CLAUDE_HOME = path.join(process.env.HOME || "/root", ".claude");
+const SESSIONS_DIR = path.join(TINYCLAW_DIR, "sessions");
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
 
 // ─── JSONL Readers ───
@@ -345,16 +345,8 @@ app.get("/api/metrics", (_req, res) => {
 
 // ─── Session Log Helpers ───
 
-function cwdToProjectSlug(cwd: string): string {
-    return "-" + cwd.replace(/^\//, "").replace(/[^a-zA-Z0-9-]/g, "-");
-}
-
-function findSessionLogFile(
-    sessionId: string,
-    cwd: string,
-): string | null {
-    const slug = cwdToProjectSlug(cwd);
-    const logFile = path.join(CLAUDE_HOME, "projects", slug, `${sessionId}.jsonl`);
+function findSessionLogFile(sessionId: string): string | null {
+    const logFile = path.join(SESSIONS_DIR, `${sessionId}.jsonl`);
     if (fs.existsSync(logFile)) return logFile;
     return null;
 }
@@ -387,12 +379,12 @@ app.get("/api/threads/:id/session-logs", (req, res) => {
     );
 
     const threadConfig = threads[threadId];
-    if (!threadConfig?.sessionId || !threadConfig?.cwd) {
+    if (!threadConfig?.sessionId) {
         res.json({ lines: [], error: "No active session" });
         return;
     }
 
-    const logFile = findSessionLogFile(threadConfig.sessionId, threadConfig.cwd);
+    const logFile = findSessionLogFile(threadConfig.sessionId);
     if (!logFile) {
         res.json({ lines: [], error: "Log file not found", sessionId: threadConfig.sessionId });
         return;
@@ -406,7 +398,7 @@ app.get("/api/threads/:id/session-logs", (req, res) => {
 app.get("/api/session-logs", (req, res) => {
     const n = Math.min(parseInt((req.query as Record<string, string>).n || "20", 10), 200);
 
-    const threads = readJsonSafe<Record<string, { sessionId?: string; cwd?: string; name?: string }>>(
+    const threads = readJsonSafe<Record<string, { sessionId?: string; name?: string }>>(
         path.join(TINYCLAW_DIR, "threads.json"),
         {},
     );
@@ -414,9 +406,9 @@ app.get("/api/session-logs", (req, res) => {
     const results: Record<string, { name: string; lines: string[]; sessionId: string }> = {};
 
     for (const [threadId, config] of Object.entries(threads)) {
-        if (!config.sessionId || !config.cwd) continue;
+        if (!config.sessionId) continue;
 
-        const logFile = findSessionLogFile(config.sessionId, config.cwd);
+        const logFile = findSessionLogFile(config.sessionId);
         if (logFile) {
             results[threadId] = {
                 name: config.name || `Thread ${threadId}`,
