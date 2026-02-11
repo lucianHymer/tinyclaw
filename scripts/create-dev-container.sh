@@ -27,11 +27,11 @@ if [ ! -f "$SSH_KEY_FILE" ]; then
     exit 1
 fi
 
-# Discover compose network dynamically (pattern-consistency fix)
+# Discover the dev network (separate from internal — dev containers can't reach dashboard/docker-proxy)
 NETWORK=$(docker network ls --filter "label=com.docker.compose.project=tinyclaw" \
-    --format '{{.Name}}' | grep internal || true)
+    --format '{{.Name}}' | grep dev || true)
 if [ -z "$NETWORK" ]; then
-    log "ERROR: Could not find tinyclaw internal network. Is docker-compose running?"
+    log "ERROR: Could not find tinyclaw dev network. Is docker-compose running?"
     exit 1
 fi
 

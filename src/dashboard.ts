@@ -392,10 +392,6 @@ function readSettingsForDashboard(): { telegram_bot_token: string; telegram_chat
     );
 }
 
-function getDashboardToken(): string {
-    return process.env.DASHBOARD_TOKEN || "";
-}
-
 function formatUptime(startedAt: string): string {
     const started = new Date(startedAt).getTime();
     if (isNaN(started)) return "unknown";
@@ -596,22 +592,6 @@ function stopContainerFeedIfIdle(): void {
     }
 }
 
-// Bearer token auth middleware for mutating endpoints
-function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction): void {
-    const token = getDashboardToken();
-    if (!token) {
-        // No token configured — allow (dev mode)
-        next();
-        return;
-    }
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.slice(7) !== token) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-    next();
-}
-
 // GET /api/containers — list all dev containers with memory stats
 app.get("/api/containers", async (_req, res) => {
     try {
@@ -660,7 +640,7 @@ app.get("/api/containers/:id/stats", async (req, res) => {
 });
 
 // POST /api/containers/:id/memory — update memory limit
-app.post("/api/containers/:id/memory", requireAuth, async (req, res) => {
+app.post("/api/containers/:id/memory", async (req, res) => {
     try {
         const containerId = String(req.params.id);
         const limitStr = (req.body as { limit?: string })?.limit;

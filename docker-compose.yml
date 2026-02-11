@@ -9,6 +9,7 @@ services:
       - BROKER_SECRET=${BROKER_SECRET}
     networks:
       - internal
+      - dev
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
@@ -88,7 +89,6 @@ services:
       - "127.0.0.1:3100:3100"
     environment:
       - DOCKER_PROXY_URL=http://docker-proxy:2375
-      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN}
     networks:
       - internal
     healthcheck:
@@ -114,4 +114,6 @@ services:
 
 networks:
   internal:
+    driver: bridge
+  dev:
     driver: bridge
