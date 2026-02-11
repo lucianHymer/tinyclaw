@@ -1778,16 +1778,16 @@ tr.clickable { cursor: pointer; }
       if (cid) memoryContainerStates[cid] = 'idle';
     };
 
-    // Also handle mouse leaving the slider without pointerup
-    cardsEl.onpointerleave = function(e) {
-      var slider = e.target.closest('input[type="range"]');
-      if (slider) {
-        var cid = slider.dataset.containerId;
-        if (cid && memoryContainerStates[cid] === 'adjusting') {
-          memoryContainerStates[cid] = 'idle';
+    // Global pointerup resets all 'adjusting' states — works even when
+    // pointer capture on the range input prevents ancestor events from firing.
+    document.addEventListener('pointerup', function() {
+      var ids = Object.keys(memoryContainerStates);
+      for (var i = 0; i < ids.length; i++) {
+        if (memoryContainerStates[ids[i]] === 'adjusting') {
+          memoryContainerStates[ids[i]] = 'idle';
         }
       }
-    };
+    });
 
     // Apply button
     document.getElementById('memory-apply-btn').onclick = applyMemoryChanges;
@@ -2052,6 +2052,9 @@ tr.clickable { cursor: pointer; }
       }
       btn.textContent = 'Apply Changes';
       updateMemoryFooter();
+      // Re-render cards with fresh server data immediately instead of
+      // waiting for the next SSE tick.
+      fetchMemoryContainers();
     }
   }
 

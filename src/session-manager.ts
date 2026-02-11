@@ -187,6 +187,17 @@ You receive periodic heartbeat messages. Read HEARTBEAT.md in your working direc
 and follow it. You can edit HEARTBEAT.md to maintain your own task list. Reply
 HEARTBEAT_OK if nothing needs attention.
 
+## MCP Tools
+
+You have these MCP tools available (use them via the tinyclaw MCP server):
+- \`send_message\` — Send a message to another thread by targetThreadId
+- \`list_threads\` — List all active threads with IDs, names, and working directories
+- \`query_knowledge_base\` — Read context.md, decisions.md, or active-projects.md from the knowledge base
+- \`get_container_stats\` — Get memory usage, CPU, uptime, and idle status for all dev containers
+- \`update_container_memory\` — Change a dev container's memory limit (validates against host capacity)
+- \`get_host_memory\` — Get host total/available memory, OS reserve, and max allocatable for containers
+- \`get_system_status\` — Get CPU, RAM, disk, load averages, and message queue depths
+
 Keep responses concise — Telegram messages over 4000 characters get split.${runtimeBlock}`;
     }
 
@@ -209,6 +220,13 @@ Cross-thread communication:
 - Reset a thread: Write {"command": "reset", "threadId": N, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/
 - Change working directory: Write {"command": "setdir", "threadId": N, "args": {"cwd": "/path"}, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/
 
+## MCP Tools
+
+You have these MCP tools available (use them via the tinyclaw MCP server):
+- \`send_message\` — Send a message to another thread by targetThreadId
+- \`list_threads\` — List all active threads with IDs, names, and working directories
+- \`query_knowledge_base\` — Read context.md, decisions.md, or active-projects.md from the knowledge base
+
 You receive periodic heartbeat messages. Read HEARTBEAT.md in your working directory
 and follow it. You can edit HEARTBEAT.md to maintain your own task list. Reply
 HEARTBEAT_OK if nothing needs attention.
@@ -218,7 +236,8 @@ Keep responses concise — Telegram messages over 4000 characters get split.${ru
 
 export function buildHeartbeatPrompt(config: ThreadConfig): string {
     const settings = loadSettings();
-    const now = new Date().toLocaleString("en-US", {
+    const timestamp = new Date();
+    const now = timestamp.toLocaleString("en-US", {
         timeZone: settings.timezone,
         weekday: "long",
         year: "numeric",
@@ -228,7 +247,7 @@ export function buildHeartbeatPrompt(config: ThreadConfig): string {
         minute: "2-digit",
         timeZoneName: "short",
     });
-    const isoNow = new Date().toISOString();
+    const isoNow = timestamp.toISOString();
 
     // Build thread inventory for daily tier
     const threads = loadThreads();

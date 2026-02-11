@@ -1,5 +1,7 @@
 #!/bin/bash
 # Heartbeat Cron - Sends heartbeat messages to all active threads via queue system
+# Note: -e is intentionally omitted — the infinite loop must survive individual failures.
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/.tinyclaw/logs/heartbeat.log"
@@ -50,11 +52,16 @@ while true; do
     fi
 
     THREAD_COUNT=$(echo "$THREAD_IDS" | wc -w)
-    STAGGER_SLEEP=$((INTERVAL / THREAD_COUNT))
+    STAGGER_SLEEP=$(( (INTERVAL / THREAD_COUNT) > 0 ? (INTERVAL / THREAD_COUNT) : 1 ))
     EPOCH_MS=$(date +%s)000
 
     CURRENT_THREAD=0
     for THREAD_ID in $THREAD_IDS; do
+        if ! [[ "$THREAD_ID" =~ ^[0-9]+$ ]]; then
+            log "WARN" "Skipping non-numeric thread ID: $THREAD_ID"
+            continue
+        fi
+
         MESSAGE_ID="heartbeat_${THREAD_ID}_$(date +%s)_$$"
 
         jq -n \
@@ -68,7 +75,8 @@ while true; do
           --argjson timestamp "$EPOCH_MS" \
           --arg messageId "$MESSAGE_ID" \
           '{channel: $channel, source: $source, threadId: $threadId, sender: $sender, senderId: $senderId, message: $message, isReply: $isReply, timestamp: $timestamp, messageId: $messageId}' \
-          > "$QUEUE_INCOMING/${MESSAGE_ID}.json"
+          > "$QUEUE_INCOMING/${MESSAGE_ID}.json.tmp"
+        mv "$QUEUE_INCOMING/${MESSAGE_ID}.json.tmp" "$QUEUE_INCOMING/${MESSAGE_ID}.json"
 
         log "Heartbeat queued for thread $THREAD_ID: $MESSAGE_ID"
         CURRENT_THREAD=$((CURRENT_THREAD + 1))

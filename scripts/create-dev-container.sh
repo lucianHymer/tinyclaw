@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-log() { echo "[$(date -Is)] $*"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 if [ $# -lt 3 ]; then
     echo "Usage: $0 <name> <port> <ssh-pubkey-file> [memory-limit]"

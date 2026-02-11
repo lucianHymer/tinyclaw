@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-log() { echo "[$(date -Is)] $*"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <name>"

@@ -7,6 +7,15 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import http from "http";
+import {
+    type DockerContainerInspect,
+    fetchDockerJson,
+    fetchDockerStats,
+    getDevContainers,
+    isValidContainerId,
+    validateAndUpdateMemory,
+    OS_RESERVE_BYTES,
+} from "./docker-client.js";
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
@@ -14,10 +23,6 @@ const STATIC_DIR = path.join(SCRIPT_DIR, "static");
 const SESSIONS_DIR = path.join(TINYCLAW_DIR, "sessions");
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://localhost:2375";
-const PROC_MEMINFO = fs.existsSync("/host/proc/meminfo") ? "/host/proc/meminfo" : "/proc/meminfo";
-const OS_RESERVE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB reserved for OS
-const MIN_MEMORY_BYTES = 256 * 1024 * 1024; // 256MB minimum per container
-const MEMORY_SNAP_BYTES = 64 * 1024 * 1024; // 64MB snap increment
 
 // ─── JSONL Readers ───
 
@@ -61,22 +66,19 @@ function readRecentJsonl<T = unknown>(filePath: string, n: number): T[] {
 
 const PROC_BASE = fs.existsSync("/host/proc") ? "/host/proc" : "/proc";
 
-function parseMeminfo(): { totalMB: number; usedMB: number; availableMB: number } {
+function parseMeminfo(): { totalBytes: number; availableBytes: number } {
     try {
         const content = fs.readFileSync(path.join(PROC_BASE, "meminfo"), "utf8");
         const get = (key: string): number => {
             const match = content.match(new RegExp(`${key}:\\s+(\\d+)`));
-            return match ? parseInt(match[1], 10) / 1024 : 0; // kB -> MB
+            return match ? parseInt(match[1], 10) * 1024 : 0; // kB -> bytes
         };
-        const total = get("MemTotal");
-        const available = get("MemAvailable");
         return {
-            totalMB: Math.round(total),
-            usedMB: Math.round(total - available),
-            availableMB: Math.round(available),
+            totalBytes: get("MemTotal"),
+            availableBytes: get("MemAvailable"),
         };
     } catch {
-        return { totalMB: 0, usedMB: 0, availableMB: 0 };
+        return { totalBytes: 0, availableBytes: 0 };
     }
 }
 
@@ -204,10 +206,15 @@ app.get("/api/status", (_req, res) => {
     const queueIncoming = countFiles(path.join(TINYCLAW_DIR, "queue/incoming"));
     const queueProcessing = countFiles(path.join(TINYCLAW_DIR, "queue/processing"));
     const queueDeadLetter = countFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
-    const mem = parseMeminfo();
+    const memBytes = parseMeminfo();
     const cpu = parseCpuPercent();
     const load = parseLoadAvg();
     const disk = getDiskUsage();
+    const mem = {
+        totalMB: Math.round(memBytes.totalBytes / 1024 / 1024),
+        usedMB: Math.round((memBytes.totalBytes - memBytes.availableBytes) / 1024 / 1024),
+        availableMB: Math.round(memBytes.availableBytes / 1024 / 1024),
+    };
 
     res.json({
         status: "ok",
@@ -235,7 +242,7 @@ app.get("/api/threads", (_req, res) => {
 // GET /api/threads/:id/messages — message history filtered by threadId
 app.get("/api/threads/:id/messages", (req, res) => {
     const threadId = parseInt(req.params.id, 10);
-    const limit = parseInt((req.query as Record<string, string>).n || "50", 10);
+    const limit = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
     const entries = readRecentJsonl<Record<string, unknown>>(
         path.join(TINYCLAW_DIR, "message-history.jsonl"),
         500,
@@ -246,7 +253,7 @@ app.get("/api/threads/:id/messages", (req, res) => {
 
 // GET /api/messages/recent?n=50 — recent messages across all threads
 app.get("/api/messages/recent", (req, res) => {
-    const n = parseInt((req.query as Record<string, string>).n || "50", 10);
+    const n = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
     const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "message-history.jsonl"), n);
     res.json(entries);
 });
@@ -328,23 +335,28 @@ app.get("/api/routing/feed", (_req, res) => {
 
 // GET /api/routing/recent?n=50
 app.get("/api/routing/recent", (req, res) => {
-    const n = parseInt((req.query as Record<string, string>).n || "50", 10);
+    const n = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
     const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "logs/routing.jsonl"), n);
     res.json(entries);
 });
 
 // GET /api/prompts/recent?n=20
 app.get("/api/prompts/recent", (req, res) => {
-    const n = parseInt((req.query as Record<string, string>).n || "20", 10);
+    const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
     const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "logs/prompts.jsonl"), n);
     res.json(entries);
 });
 
 // GET /api/metrics — CPU, RAM, disk, load
 app.get("/api/metrics", (_req, res) => {
+    const memBytes = parseMeminfo();
     res.json({
         cpu: parseCpuPercent(),
-        mem: parseMeminfo(),
+        mem: {
+            totalMB: Math.round(memBytes.totalBytes / 1024 / 1024),
+            usedMB: Math.round((memBytes.totalBytes - memBytes.availableBytes) / 1024 / 1024),
+            availableMB: Math.round(memBytes.availableBytes / 1024 / 1024),
+        },
         load: parseLoadAvg(),
         disk: getDiskUsage(),
         timestamp: Date.now(),
@@ -352,72 +364,6 @@ app.get("/api/metrics", (_req, res) => {
 });
 
 // ─── Docker Container Management ───
-
-interface DockerContainer {
-    Id: string;
-    Names: string[];
-    State: string;
-    Status: string;
-    Labels: Record<string, string>;
-    Created: number;
-    HostConfig?: { NanoCpus?: number };
-}
-
-interface DockerContainerInspect {
-    Id: string;
-    Name: string;
-    State: { Status: string; StartedAt: string; Pid: number };
-    HostConfig: { Memory: number; MemorySwap: number; NanoCpus: number };
-}
-
-interface DockerStats {
-    memory_stats: { usage: number; limit: number };
-    pids_stats: { current: number };
-}
-
-interface ContainerInfo {
-    id: string;
-    name: string;
-    status: string;
-    memory: { usage: number; limit: number; usagePercent: number };
-    cpus: number;
-    uptime: string;
-    idle: boolean;
-}
-
-function readSettingsForDashboard(): { telegram_bot_token: string; telegram_chat_id: string } {
-    return readJsonSafe<{ telegram_bot_token: string; telegram_chat_id: string }>(
-        path.join(TINYCLAW_DIR, "settings.json"),
-        { telegram_bot_token: "", telegram_chat_id: "" },
-    );
-}
-
-function formatUptime(startedAt: string): string {
-    const started = new Date(startedAt).getTime();
-    if (isNaN(started)) return "unknown";
-    const diffMs = Date.now() - started;
-    const days = Math.floor(diffMs / 86400000);
-    const hours = Math.floor((diffMs % 86400000) / 3600000);
-    if (days > 0) return `${days}d ${hours}h`;
-    const minutes = Math.floor((diffMs % 3600000) / 60000);
-    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
-function getHostMemoryBytes(): { totalMemory: number; availableMemory: number } {
-    try {
-        const content = fs.readFileSync(PROC_MEMINFO, "utf8");
-        const get = (key: string): number => {
-            const match = content.match(new RegExp(`${key}:\\s+(\\d+)`));
-            return match ? parseInt(match[1], 10) * 1024 : 0; // kB -> bytes
-        };
-        return {
-            totalMemory: get("MemTotal"),
-            availableMemory: get("MemAvailable"),
-        };
-    } catch {
-        return { totalMemory: 0, availableMemory: 0 };
-    }
-}
 
 function parseMemoryLimit(limit: string): number {
     const match = limit.match(/^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)?$/i);
@@ -439,135 +385,28 @@ function parseMemoryLimit(limit: string): number {
     }
 }
 
-function formatBytes(bytes: number): string {
-    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + "GB";
-    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(0) + "MB";
-    return bytes + "B";
-}
-
-async function fetchDockerJson<T>(urlPath: string, method = "GET", body?: unknown): Promise<T> {
-    const url = `${DOCKER_PROXY_URL}${urlPath}`;
-    const opts: RequestInit = {
-        method,
-        headers: body ? { "Content-Type": "application/json" } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
-    };
-    const resp = await fetch(url, opts);
-    if (!resp.ok) {
-        const text = await resp.text().catch(() => "");
-        throw new Error(`Docker API ${method} ${urlPath}: ${resp.status} ${text}`);
-    }
-    return (await resp.json()) as T;
-}
-
-async function fetchDockerStats(containerId: string): Promise<DockerStats> {
-    // stream=false returns a single stats snapshot
-    const url = `${DOCKER_PROXY_URL}/containers/${containerId}/stats?stream=false`;
-    const resp = await fetch(url);
-    if (!resp.ok) {
-        throw new Error(`Docker stats ${containerId}: ${resp.status}`);
-    }
-    return (await resp.json()) as DockerStats;
-}
-
-async function getDevContainers(): Promise<ContainerInfo[]> {
-    // List all containers, then filter by label
-    const containers = await fetchDockerJson<DockerContainer[]>(
-        '/containers/json?all=true&filters={"label":["tinyclaw.type=dev-container"]}',
-    );
-
-    const results: ContainerInfo[] = [];
-    for (const c of containers) {
-        const name = (c.Names[0] || "").replace(/^\//, "");
-        let usage = 0;
-        let limit = 0;
-        let cpus = 0;
-        let uptime = "";
-        let idle = true;
-        let pid = 0;
-
-        try {
-            const inspect = await fetchDockerJson<DockerContainerInspect>(
-                `/containers/${c.Id}/json`,
-            );
-            limit = inspect.HostConfig.Memory || 0;
-            cpus = inspect.HostConfig.NanoCpus ? inspect.HostConfig.NanoCpus / 1e9 : 0;
-            uptime = inspect.State.StartedAt ? formatUptime(inspect.State.StartedAt) : "";
-            pid = inspect.State.Pid || 0;
-        } catch {
-            // inspect failed, use defaults
-        }
-
-        if (c.State === "running") {
-            try {
-                const stats = await fetchDockerStats(c.Id);
-                usage = stats.memory_stats?.usage || 0;
-                if (stats.memory_stats?.limit) limit = stats.memory_stats.limit;
-                // Consider container idle if only 1-2 processes (init + sshd)
-                idle = (stats.pids_stats?.current || 0) <= 2;
-            } catch {
-                // stats failed
-            }
-        }
-
-        results.push({
-            id: c.Id,
-            name,
-            status: c.State,
-            memory: {
-                usage,
-                limit,
-                usagePercent: limit > 0 ? Math.round((usage / limit) * 1000) / 10 : 0,
-            },
-            cpus: Math.round(cpus * 10) / 10,
-            uptime,
-            idle,
-        });
-    }
-
-    // Sort by memory usage descending
-    results.sort((a, b) => b.memory.usage - a.memory.usage);
-    return results;
-}
-
-async function notifyMemoryChange(containerName: string, oldLimit: string, newLimit: string): Promise<void> {
-    try {
-        const settings = readSettingsForDashboard();
-        if (!settings.telegram_bot_token || !settings.telegram_chat_id) return;
-        const message = `Memory rebalanced: ${containerName} ${oldLimit} \u2192 ${newLimit}`;
-        const url = `https://api.telegram.org/bot${settings.telegram_bot_token}/sendMessage`;
-        await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                chat_id: settings.telegram_chat_id,
-                message_thread_id: 1,
-                text: message,
-            }),
-        });
-    } catch {
-        // Notification is best-effort, don't fail the request
-    }
-}
-
 // ─── SSE Container Feed (server-side polling with broadcast) ───
 
 const containerFeedClients = new Set<http.ServerResponse>();
 let containerFeedInterval: ReturnType<typeof setInterval> | null = null;
+let containerFeedPolling = false;
 
 function startContainerFeed(): void {
     if (containerFeedInterval) return;
     containerFeedInterval = setInterval(async () => {
         if (containerFeedClients.size === 0) return;
+        // Skip this tick if the previous poll is still running (overlap guard)
+        if (containerFeedPolling) return;
+        containerFeedPolling = true;
         try {
-            const containers = await getDevContainers();
-            const host = getHostMemoryBytes();
+            const containers = await getDevContainers(DOCKER_PROXY_URL);
+            const host = parseMeminfo();
             const allocatedTotal = containers.reduce((sum, c) => sum + c.memory.limit, 0);
             const data = JSON.stringify({
                 containers,
                 host: {
-                    totalMemory: host.totalMemory,
-                    availableMemory: host.availableMemory,
+                    totalMemory: host.totalBytes,
+                    availableMemory: host.availableBytes,
                     allocatedTotal,
                     osReserve: OS_RESERVE_BYTES,
                 },
@@ -581,6 +420,8 @@ function startContainerFeed(): void {
             }
         } catch {
             // Docker API may be unavailable, skip this tick
+        } finally {
+            containerFeedPolling = false;
         }
     }, 5000);
 }
@@ -595,14 +436,14 @@ function stopContainerFeedIfIdle(): void {
 // GET /api/containers — list all dev containers with memory stats
 app.get("/api/containers", async (_req, res) => {
     try {
-        const containers = await getDevContainers();
-        const host = getHostMemoryBytes();
+        const containers = await getDevContainers(DOCKER_PROXY_URL);
+        const host = parseMeminfo();
         const allocatedTotal = containers.reduce((sum, c) => sum + c.memory.limit, 0);
         res.json({
             containers,
             host: {
-                totalMemory: host.totalMemory,
-                availableMemory: host.availableMemory,
+                totalMemory: host.totalBytes,
+                availableMemory: host.availableBytes,
                 allocatedTotal,
                 osReserve: OS_RESERVE_BYTES,
             },
@@ -617,8 +458,13 @@ app.get("/api/containers", async (_req, res) => {
 app.get("/api/containers/:id/stats", async (req, res) => {
     try {
         const containerId = String(req.params.id);
-        const stats = await fetchDockerStats(containerId);
+        if (!isValidContainerId(containerId)) {
+            res.status(400).json({ error: "Invalid container ID. Expected 12-64 hex characters." });
+            return;
+        }
+        const stats = await fetchDockerStats(DOCKER_PROXY_URL, containerId);
         const inspect = await fetchDockerJson<DockerContainerInspect>(
+            DOCKER_PROXY_URL,
             `/containers/${containerId}/json`,
         );
         const usage = stats.memory_stats?.usage || 0;
@@ -643,6 +489,10 @@ app.get("/api/containers/:id/stats", async (req, res) => {
 app.post("/api/containers/:id/memory", async (req, res) => {
     try {
         const containerId = String(req.params.id);
+        if (!isValidContainerId(containerId)) {
+            res.status(400).json({ error: "Invalid container ID. Expected 12-64 hex characters." });
+            return;
+        }
         const limitStr = (req.body as { limit?: string })?.limit;
         if (!limitStr || typeof limitStr !== "string") {
             res.status(400).json({ error: "Missing or invalid 'limit' field (e.g. '4g', '2048m')" });
@@ -650,91 +500,34 @@ app.post("/api/containers/:id/memory", async (req, res) => {
         }
 
         const newLimitBytes = parseMemoryLimit(limitStr);
-        if (newLimitBytes < MIN_MEMORY_BYTES) {
-            res.status(400).json({
-                error: `Limit too low. Minimum is ${formatBytes(MIN_MEMORY_BYTES)}`,
-            });
-            return;
-        }
+        const hostMem = parseMeminfo();
 
-        // Snap to 64MB increment
-        const snappedLimit = Math.round(newLimitBytes / MEMORY_SNAP_BYTES) * MEMORY_SNAP_BYTES;
-
-        // Verify the container is a dev container
-        const inspect = await fetchDockerJson<DockerContainerInspect>(
-            `/containers/${containerId}/json`,
-        );
-        const containerName = (inspect.Name || "").replace(/^\//, "");
-
-        // Re-read live stats for usage validation
-        let currentUsage = 0;
-        if (inspect.State.Status === "running") {
-            try {
-                const stats = await fetchDockerStats(containerId);
-                currentUsage = stats.memory_stats?.usage || 0;
-            } catch {
-                // Can't read stats — proceed with caution
-            }
-        }
-
-        const oldLimit = inspect.HostConfig.Memory || 0;
-
-        // Get all dev containers to validate total allocation
-        const allContainers = await getDevContainers();
-        const otherContainersTotal = allContainers
-            .filter(c => c.id !== containerId)
-            .reduce((sum, c) => sum + c.memory.limit, 0);
-        const hostMem = getHostMemoryBytes();
-        const maxAllocatable = hostMem.totalMemory - OS_RESERVE_BYTES;
-        const newTotal = otherContainersTotal + snappedLimit;
-
-        if (newTotal > maxAllocatable) {
-            res.status(400).json({
-                error: `Total allocation would be ${formatBytes(newTotal)}, exceeding max ${formatBytes(maxAllocatable)} (host ${formatBytes(hostMem.totalMemory)} - ${formatBytes(OS_RESERVE_BYTES)} OS reserve)`,
-            });
-            return;
-        }
-
-        // Warn if lowering below current usage
-        let warning: string | undefined;
-        if (snappedLimit < currentUsage) {
-            warning = `New limit (${formatBytes(snappedLimit)}) is below current usage (${formatBytes(currentUsage)}). Docker may OOM-kill this container immediately.`;
-        } else if (currentUsage > 0 && snappedLimit < currentUsage * 1.25) {
-            warning = `New limit (${formatBytes(snappedLimit)}) is close to current usage (${formatBytes(currentUsage)}). The container may be OOM-killed under load.`;
-        }
-
-        // Apply the update: set both Memory and MemorySwap to match
-        await fetchDockerJson(
-            `/containers/${containerId}/update`,
-            "POST",
-            { Memory: snappedLimit, MemorySwap: snappedLimit },
+        const result = await validateAndUpdateMemory(
+            DOCKER_PROXY_URL,
+            containerId,
+            newLimitBytes,
+            hostMem.totalBytes,
         );
 
-        // Notify via Telegram (best-effort, non-blocking)
-        notifyMemoryChange(containerName, formatBytes(oldLimit), formatBytes(snappedLimit));
-
-        res.json({
-            id: containerId,
-            name: containerName,
-            oldLimit,
-            newLimit: snappedLimit,
-            warning,
-        });
+        res.json(result);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        res.status(502).json({ error: "Failed to update container memory", detail: msg });
+        // Validation errors from validateAndUpdateMemory are user errors (400),
+        // Docker API failures are upstream errors (502)
+        const status = msg.startsWith("Limit too low") || msg.startsWith("Total allocation") ? 400 : 502;
+        res.status(status).json({ error: msg });
     }
 });
 
 // GET /api/host/memory — host total RAM and current usage
 app.get("/api/host/memory", (_req, res) => {
-    const hostMem = getHostMemoryBytes();
+    const hostMem = parseMeminfo();
     res.json({
-        totalMemory: hostMem.totalMemory,
-        availableMemory: hostMem.availableMemory,
-        usedMemory: hostMem.totalMemory - hostMem.availableMemory,
+        totalMemory: hostMem.totalBytes,
+        availableMemory: hostMem.availableBytes,
+        usedMemory: hostMem.totalBytes - hostMem.availableBytes,
         osReserve: OS_RESERVE_BYTES,
-        maxAllocatable: hostMem.totalMemory - OS_RESERVE_BYTES,
+        maxAllocatable: hostMem.totalBytes - OS_RESERVE_BYTES,
     });
 });
 
@@ -784,7 +577,7 @@ function tailLines(filePath: string, n: number): string[] {
 // GET /api/threads/:id/session-logs?n=20 — tail of Claude SDK session log
 app.get("/api/threads/:id/session-logs", (req, res) => {
     const threadId = req.params.id;
-    const n = Math.min(parseInt((req.query as Record<string, string>).n || "20", 10), 200);
+    const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
 
     const threads = readJsonSafe<Record<string, { sessionId?: string; cwd?: string }>>(
         path.join(TINYCLAW_DIR, "threads.json"),
@@ -809,7 +602,7 @@ app.get("/api/threads/:id/session-logs", (req, res) => {
 
 // GET /api/session-logs?n=20 — all active threads' session log tails
 app.get("/api/session-logs", (req, res) => {
-    const n = Math.min(parseInt((req.query as Record<string, string>).n || "20", 10), 200);
+    const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
 
     const threads = readJsonSafe<Record<string, { sessionId?: string; name?: string }>>(
         path.join(TINYCLAW_DIR, "threads.json"),

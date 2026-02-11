@@ -4,9 +4,18 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import {
+    type DockerContainer,
+    fetchDockerJson,
+    formatBytes,
+    getDevContainers,
+    OS_RESERVE_BYTES,
+    validateAndUpdateMemory,
+} from "./docker-client.js";
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(PROJECT_DIR, ".tinyclaw");
@@ -14,9 +23,74 @@ const THREADS_FILE = path.join(TINYCLAW_DIR, "threads.json");
 const QUEUE_INCOMING = path.join(TINYCLAW_DIR, "queue/incoming");
 const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://docker-proxy:2375";
+const PROC_BASE = fs.existsSync("/host/proc") ? "/host/proc" : "/proc";
+const PROC_MEMINFO = path.join(PROC_BASE, "meminfo");
+
+function parseMeminfo(): { totalBytes: number; availableBytes: number } {
+    try {
+        const content = fs.readFileSync(PROC_MEMINFO, "utf8");
+        const get = (key: string): number => {
+            const match = content.match(new RegExp(`${key}:\\s+(\\d+)`));
+            return match ? parseInt(match[1], 10) * 1024 : 0; // kB -> bytes
+        };
+        return { totalBytes: get("MemTotal"), availableBytes: get("MemAvailable") };
+    } catch {
+        return { totalBytes: 0, availableBytes: 0 };
+    }
+}
+
+function getHostTotalMemoryBytes(): number {
+    return parseMeminfo().totalBytes;
+}
+
+let prevCpuIdle = 0;
+let prevCpuTotal = 0;
+
+function parseCpuPercent(): number {
+    try {
+        const content = fs.readFileSync(path.join(PROC_BASE, "stat"), "utf8");
+        const line = content.split("\n").find(l => l.startsWith("cpu "));
+        if (!line) return 0;
+        const parts = line.split(/\s+/).slice(1).map(Number);
+        const idle = parts[3] + (parts[4] || 0); // idle + iowait
+        const total = parts.reduce((a, b) => a + b, 0);
+        const diffIdle = idle - prevCpuIdle;
+        const diffTotal = total - prevCpuTotal;
+        prevCpuIdle = idle;
+        prevCpuTotal = total;
+        if (diffTotal === 0) return 0;
+        return Math.round((1 - diffIdle / diffTotal) * 100);
+    } catch {
+        return 0;
+    }
+}
+
+function getDiskUsage(): { totalGB: number; usedGB: number; availGB: number } {
+    try {
+        const stats = fs.statfsSync(TINYCLAW_DIR);
+        const blockSize = stats.bsize;
+        const totalGB = Math.round((stats.blocks * blockSize) / 1024 ** 3 * 10) / 10;
+        const availGB = Math.round((stats.bavail * blockSize) / 1024 ** 3 * 10) / 10;
+        return { totalGB, usedGB: Math.round((totalGB - availGB) * 10) / 10, availGB };
+    } catch {
+        return { totalGB: 0, usedGB: 0, availGB: 0 };
+    }
+}
+
+function countQueueFiles(dir: string): number {
+    try {
+        return fs.readdirSync(dir).filter(f => f.endsWith(".json")).length;
+    } catch {
+        return 0;
+    }
+}
 
 function readThreads(): Record<string, { name: string; cwd: string; isMaster?: boolean }> {
     return JSON.parse(fs.readFileSync(THREADS_FILE, "utf8"));
+}
+
+function textContent(text: string) {
+    return { type: "text" as const, text };
 }
 
 /**
@@ -31,22 +105,22 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         async ({ targetThreadId, message }) => {
             if (targetThreadId === sourceThreadId) {
                 return {
-                    content: [{ type: "text" as const, text: "Cannot send a message to your own thread" }],
+                    content: [textContent("Cannot send a message to your own thread")],
                     isError: true,
                 };
             }
 
-            let threads: Record<string, any>;
+            let threads: ReturnType<typeof readThreads>;
             try {
                 threads = readThreads();
             } catch {
-                return { content: [{ type: "text" as const, text: "Could not read threads.json" }], isError: true };
+                return { content: [textContent("Could not read threads.json")], isError: true };
             }
 
             if (!threads[String(targetThreadId)]) {
                 const available = Object.entries(threads).map(([id, t]) => `${id}: ${t.name}`).join(", ");
                 return {
-                    content: [{ type: "text" as const, text: `Thread ${targetThreadId} not found. Available: ${available}` }],
+                    content: [textContent(`Thread ${targetThreadId} not found. Available: ${available}`)],
                     isError: true,
                 };
             }
@@ -92,7 +166,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
             fs.renameSync(outTmp, outFinal);
 
             const targetName = threads[String(targetThreadId)].name;
-            return { content: [{ type: "text" as const, text: `Message sent to thread ${targetThreadId} (${targetName})` }] };
+            return { content: [textContent(`Message sent to thread ${targetThreadId} (${targetName})`)] };
         },
     );
 
@@ -110,9 +184,9 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                     if (Number(id) === sourceThreadId) parts.push("(you)");
                     return parts.join(" ");
                 });
-                return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+                return { content: [textContent(lines.join("\n"))] };
             } catch {
-                return { content: [{ type: "text" as const, text: "No threads.json found — no active threads" }], isError: true };
+                return { content: [textContent("No threads.json found — no active threads")], isError: true };
             }
         },
     );
@@ -126,17 +200,17 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 const masterConfig = readThreads()["1"];
                 if (!masterConfig?.cwd) {
                     return {
-                        content: [{ type: "text" as const, text: "Master thread (thread 1) not found or has no cwd configured" }],
+                        content: [textContent("Master thread (thread 1) not found or has no cwd configured")],
                         isError: true,
                     };
                 }
                 const filePath = path.join(masterConfig.cwd, filename);
                 const content = fs.readFileSync(filePath, "utf-8");
-                return { content: [{ type: "text" as const, text: content }] };
+                return { content: [textContent(content)] };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 return {
-                    content: [{ type: "text" as const, text: `Could not read knowledge base file "${filename}": ${msg}` }],
+                    content: [textContent(`Could not read knowledge base file "${filename}": ${msg}`)],
                     isError: true,
                 };
             }
@@ -151,83 +225,27 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         {},
         async () => {
             try {
-                const resp = await fetch(
-                    `${DOCKER_PROXY_URL}/containers/json?all=true&filters=${encodeURIComponent(JSON.stringify({ label: ["tinyclaw.type=dev-container"] }))}`,
-                );
-                if (!resp.ok) {
+                const containers = await getDevContainers(DOCKER_PROXY_URL);
+
+                if (containers.length === 0) {
                     return {
-                        content: [{ type: "text" as const, text: `Docker API error: ${resp.status} ${resp.statusText}` }],
-                        isError: true,
-                    };
-                }
-                const containers = (await resp.json()) as Array<{
-                    Id: string;
-                    Names: string[];
-                    State: string;
-                }>;
-
-                const lines: string[] = [];
-                for (const c of containers) {
-                    const name = (c.Names[0] || "").replace(/^\//, "");
-                    let usage = 0;
-                    let limit = 0;
-                    let cpus = 0;
-                    let pids = 0;
-
-                    if (c.State === "running") {
-                        try {
-                            const statsResp = await fetch(
-                                `${DOCKER_PROXY_URL}/containers/${c.Id}/stats?stream=false`,
-                            );
-                            if (statsResp.ok) {
-                                const stats = (await statsResp.json()) as {
-                                    memory_stats: { usage: number; limit: number };
-                                    pids_stats: { current: number };
-                                };
-                                usage = stats.memory_stats?.usage || 0;
-                                limit = stats.memory_stats?.limit || 0;
-                                pids = stats.pids_stats?.current || 0;
-                            }
-                        } catch {
-                            // stats unavailable
-                        }
-                        try {
-                            const inspResp = await fetch(
-                                `${DOCKER_PROXY_URL}/containers/${c.Id}/json`,
-                            );
-                            if (inspResp.ok) {
-                                const inspect = (await inspResp.json()) as {
-                                    HostConfig: { Memory: number; NanoCpus: number };
-                                };
-                                if (inspect.HostConfig.Memory) limit = inspect.HostConfig.Memory;
-                                cpus = inspect.HostConfig.NanoCpus ? inspect.HostConfig.NanoCpus / 1e9 : 0;
-                            }
-                        } catch {
-                            // inspect unavailable
-                        }
-                    }
-
-                    const usageMB = (usage / (1024 * 1024)).toFixed(0);
-                    const limitMB = (limit / (1024 * 1024)).toFixed(0);
-                    const pct = limit > 0 ? ((usage / limit) * 100).toFixed(1) : "?";
-                    const idle = pids <= 2 ? " (idle)" : "";
-
-                    lines.push(
-                        `${name}: ${c.State} | ${usageMB}MB / ${limitMB}MB (${pct}%) | ${cpus.toFixed(1)} CPUs | ${pids} procs${idle}`,
-                    );
-                }
-
-                if (lines.length === 0) {
-                    return {
-                        content: [{ type: "text" as const, text: "No dev containers found (label: tinyclaw.type=dev-container)" }],
+                        content: [textContent("No dev containers found (label: tinyclaw.type=dev-container)")],
                     };
                 }
 
-                return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+                const lines = containers.map(c => {
+                    const usageMB = (c.memory.usage / (1024 * 1024)).toFixed(0);
+                    const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
+                    const pct = c.memory.limit > 0 ? ((c.memory.usage / c.memory.limit) * 100).toFixed(1) : "?";
+                    const idle = c.idle ? " (idle)" : "";
+                    return `${c.name}: ${c.status} | ${usageMB}MB / ${limitMB}MB (${pct}%) | ${c.cpus.toFixed(1)} CPUs | ${c.uptime}${idle}`;
+                });
+
+                return { content: [textContent(lines.join("\n"))] };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 return {
-                    content: [{ type: "text" as const, text: `Failed to get container stats: ${msg}` }],
+                    content: [textContent(`Failed to get container stats: ${msg}`)],
                     isError: true,
                 };
             }
@@ -236,70 +254,121 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
     const updateContainerMemory = tool(
         "update_container_memory",
-        "Update memory limit for a dev container. Limit in bytes. Also sets MemorySwap to match. Only works for containers with tinyclaw.type=dev-container label.",
+        "Update memory limit for a dev container. Limit in bytes. Snaps to 64MB increments, validates total allocation against host capacity, and warns about OOM risks. Only works for containers with tinyclaw.type=dev-container label.",
         { containerName: z.string(), memoryLimitBytes: z.number() },
         async ({ containerName, memoryLimitBytes }) => {
             try {
-                const MIN_LIMIT = 256 * 1024 * 1024; // 256MB
-                if (memoryLimitBytes < MIN_LIMIT) {
-                    return {
-                        content: [{ type: "text" as const, text: `Limit too low. Minimum is ${MIN_LIMIT} bytes (256MB).` }],
-                        isError: true,
-                    };
-                }
-
-                // Find container by name
-                const listResp = await fetch(
-                    `${DOCKER_PROXY_URL}/containers/json?all=true&filters=${encodeURIComponent(JSON.stringify({ label: ["tinyclaw.type=dev-container"], name: [containerName] }))}`,
+                // Find container by name among dev containers
+                const containers = await fetchDockerJson<DockerContainer[]>(
+                    DOCKER_PROXY_URL,
+                    `/containers/json?all=true&filters=${encodeURIComponent(JSON.stringify({ label: ["tinyclaw.type=dev-container"], name: [containerName] }))}`,
                 );
-                if (!listResp.ok) {
-                    return {
-                        content: [{ type: "text" as const, text: `Docker API error listing containers: ${listResp.status}` }],
-                        isError: true,
-                    };
-                }
-
-                const matches = (await listResp.json()) as Array<{ Id: string; Names: string[] }>;
-                const match = matches.find(c =>
+                const match = containers.find(c =>
                     (c.Names[0] || "").replace(/^\//, "") === containerName,
                 );
 
                 if (!match) {
                     return {
-                        content: [{ type: "text" as const, text: `Container "${containerName}" not found among dev containers` }],
+                        content: [textContent(`Container "${containerName}" not found among dev containers`)],
                         isError: true,
                     };
                 }
 
-                // Apply the update
-                const updateResp = await fetch(
-                    `${DOCKER_PROXY_URL}/containers/${match.Id}/update`,
-                    {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            Memory: memoryLimitBytes,
-                            MemorySwap: memoryLimitBytes,
-                        }),
-                    },
+                // Validate and apply the update with full safety checks
+                const hostTotal = getHostTotalMemoryBytes();
+                const result = await validateAndUpdateMemory(
+                    DOCKER_PROXY_URL,
+                    match.Id,
+                    memoryLimitBytes,
+                    hostTotal,
                 );
 
-                if (!updateResp.ok) {
-                    const errText = await updateResp.text().catch(() => "");
-                    return {
-                        content: [{ type: "text" as const, text: `Docker update failed: ${updateResp.status} ${errText}` }],
-                        isError: true,
-                    };
+                const parts = [`Updated ${result.name} memory limit: ${formatBytes(result.oldLimit)} -> ${formatBytes(result.newLimit)}`];
+                if (result.warning) {
+                    parts.push(`WARNING: ${result.warning}`);
                 }
 
-                const limitMB = (memoryLimitBytes / (1024 * 1024)).toFixed(0);
-                return {
-                    content: [{ type: "text" as const, text: `Updated ${containerName} memory limit to ${limitMB}MB (${memoryLimitBytes} bytes)` }],
-                };
+                return { content: [textContent(parts.join("\n"))] };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 return {
-                    content: [{ type: "text" as const, text: `Failed to update container memory: ${msg}` }],
+                    content: [textContent(`Failed to update container memory: ${msg}`)],
+                    isError: true,
+                };
+            }
+        },
+    );
+
+    const getHostMemory = tool(
+        "get_host_memory",
+        "Get host machine memory information: total, available, OS reserve, and max allocatable for containers. Use this before making container memory allocation decisions.",
+        {},
+        async () => {
+            try {
+                const { totalBytes, availableBytes } = parseMeminfo();
+                const maxAllocatable = totalBytes - OS_RESERVE_BYTES;
+
+                const lines = [
+                    `Total Memory:     ${formatBytes(totalBytes)} (${totalBytes} bytes)`,
+                    `Available Memory: ${formatBytes(availableBytes)} (${availableBytes} bytes)`,
+                    `OS Reserve:       ${formatBytes(OS_RESERVE_BYTES)} (${OS_RESERVE_BYTES} bytes)`,
+                    `Max Allocatable:  ${formatBytes(maxAllocatable)} (${maxAllocatable} bytes)`,
+                ];
+
+                return { content: [textContent(lines.join("\n"))] };
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return {
+                    content: [textContent(`Failed to read host memory: ${msg}`)],
+                    isError: true,
+                };
+            }
+        },
+    );
+
+    const getSystemStatus = tool(
+        "get_system_status",
+        "Get system status overview: CPU usage, RAM usage, disk usage, load averages, and message queue depths. Use this for infrastructure health monitoring.",
+        {},
+        async () => {
+            try {
+                const cpuPercent = parseCpuPercent();
+                const { totalBytes, availableBytes } = parseMeminfo();
+                const usedBytes = totalBytes - availableBytes;
+                const disk = getDiskUsage();
+                const loadAvg = os.loadavg();
+
+                const queueIncoming = countQueueFiles(QUEUE_INCOMING);
+                const queueOutgoing = countQueueFiles(QUEUE_OUTGOING);
+                const queueProcessing = countQueueFiles(path.join(TINYCLAW_DIR, "queue/processing"));
+                const queueDeadLetter = countQueueFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
+
+                const lines = [
+                    `== CPU ==`,
+                    `Usage: ${cpuPercent}%`,
+                    ``,
+                    `== Memory ==`,
+                    `Used: ${formatBytes(usedBytes)} / ${formatBytes(totalBytes)} (${totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0}%)`,
+                    `Available: ${formatBytes(availableBytes)}`,
+                    ``,
+                    `== Disk ==`,
+                    `Used: ${disk.usedGB}GB / ${disk.totalGB}GB (available: ${disk.availGB}GB)`,
+                    ``,
+                    `== Load Averages ==`,
+                    `1m: ${loadAvg[0].toFixed(2)}  5m: ${loadAvg[1].toFixed(2)}  15m: ${loadAvg[2].toFixed(2)}`,
+                    ``,
+                    `== Queue Depths ==`,
+                    `Incoming:    ${queueIncoming}`,
+                    `Outgoing:    ${queueOutgoing}`,
+                    `Processing:  ${queueProcessing}`,
+                    `Dead Letter: ${queueDeadLetter}`,
+                ];
+
+                return { content: [textContent(lines.join("\n"))] };
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return {
+                    content: [textContent(`Failed to get system status: ${msg}`)],
                     isError: true,
                 };
             }
@@ -307,10 +376,10 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
     );
 
     // Build tool list: base tools for all threads, container tools for master only
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous tool schemas require type erasure
     const tools: Array<ReturnType<typeof tool<any>>> = [sendMessage, listThreads, queryKnowledgeBase];
     if (sourceThreadId === 1) {
-        tools.push(getContainerStats, updateContainerMemory);
+        tools.push(getContainerStats, updateContainerMemory, getHostMemory, getSystemStatus);
     }
 
     return createSdkMcpServer({

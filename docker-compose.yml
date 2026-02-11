@@ -101,16 +101,16 @@ services:
         limits:
           memory: 256M
 
-  # cloudflared:
-  #   image: cloudflare/cloudflared:latest
-  #   restart: always
-  #   command: tunnel run
-  #   environment:
-  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
-  #   depends_on:
-  #     - dashboard
-  #   networks:
-  #     - internal
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - dashboard
+    networks:
+      - internal
 
 networks:
   internal:
