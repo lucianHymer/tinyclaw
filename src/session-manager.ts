@@ -41,7 +41,7 @@ const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
 const THREADS_FILE = path.join(TINYCLAW_DIR, "threads.json");
 const SETTINGS_FILE = path.join(TINYCLAW_DIR, "settings.json");
 const DEFAULT_CWD = process.env.DEFAULT_CWD || "/home/clawcian/.openclaw/workspace";
-export const MAX_CONCURRENT_SESSIONS = 10;
+export const MAX_CONCURRENT_SESSIONS = 2;
 
 // ─── In-memory caches ───
 

@@ -11,6 +11,7 @@ import http from "http";
 const SCRIPT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
 const STATIC_DIR = path.join(SCRIPT_DIR, "static");
+const CLAUDE_HOME = path.join(process.env.HOME || "/root", ".claude");
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
 
 // ─── JSONL Readers ───
@@ -340,6 +341,92 @@ app.get("/api/metrics", (_req, res) => {
         disk: getDiskUsage(),
         timestamp: Date.now(),
     });
+});
+
+// ─── Session Log Helpers ───
+
+function cwdToProjectSlug(cwd: string): string {
+    return "-" + cwd.replace(/^\//, "").replace(/[^a-zA-Z0-9-]/g, "-");
+}
+
+function findSessionLogFile(
+    sessionId: string,
+    cwd: string,
+): string | null {
+    const slug = cwdToProjectSlug(cwd);
+    const logFile = path.join(CLAUDE_HOME, "projects", slug, `${sessionId}.jsonl`);
+    if (fs.existsSync(logFile)) return logFile;
+    return null;
+}
+
+function tailLines(filePath: string, n: number): string[] {
+    const stat = fs.statSync(filePath);
+    if (stat.size === 0) return [];
+
+    const TAIL_BYTES = Math.min(128 * 1024, stat.size);
+    const fd = fs.openSync(filePath, "r");
+    try {
+        const buf = Buffer.alloc(TAIL_BYTES);
+        fs.readSync(fd, buf, 0, TAIL_BYTES, Math.max(0, stat.size - TAIL_BYTES));
+        const content = buf.toString("utf8");
+        const lines = content.split("\n").filter(l => l.trim());
+        return lines.slice(-n);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+// GET /api/threads/:id/session-logs?n=20 — tail of Claude SDK session log
+app.get("/api/threads/:id/session-logs", (req, res) => {
+    const threadId = req.params.id;
+    const n = Math.min(parseInt((req.query as Record<string, string>).n || "20", 10), 200);
+
+    const threads = readJsonSafe<Record<string, { sessionId?: string; cwd?: string }>>(
+        path.join(TINYCLAW_DIR, "threads.json"),
+        {},
+    );
+
+    const threadConfig = threads[threadId];
+    if (!threadConfig?.sessionId || !threadConfig?.cwd) {
+        res.json({ lines: [], error: "No active session" });
+        return;
+    }
+
+    const logFile = findSessionLogFile(threadConfig.sessionId, threadConfig.cwd);
+    if (!logFile) {
+        res.json({ lines: [], error: "Log file not found", sessionId: threadConfig.sessionId });
+        return;
+    }
+
+    const lines = tailLines(logFile, n);
+    res.json({ lines, sessionId: threadConfig.sessionId, logFile });
+});
+
+// GET /api/session-logs?n=20 — all active threads' session log tails
+app.get("/api/session-logs", (req, res) => {
+    const n = Math.min(parseInt((req.query as Record<string, string>).n || "20", 10), 200);
+
+    const threads = readJsonSafe<Record<string, { sessionId?: string; cwd?: string; name?: string }>>(
+        path.join(TINYCLAW_DIR, "threads.json"),
+        {},
+    );
+
+    const results: Record<string, { name: string; lines: string[]; sessionId: string }> = {};
+
+    for (const [threadId, config] of Object.entries(threads)) {
+        if (!config.sessionId || !config.cwd) continue;
+
+        const logFile = findSessionLogFile(config.sessionId, config.cwd);
+        if (logFile) {
+            results[threadId] = {
+                name: config.name || `Thread ${threadId}`,
+                lines: tailLines(logFile, n),
+                sessionId: config.sessionId,
+            };
+        }
+    }
+
+    res.json(results);
 });
 
 // GET /api/logs/:type — SSE stream of log files (telegram | queue)

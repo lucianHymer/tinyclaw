@@ -543,7 +543,7 @@ tr.clickable { cursor: pointer; }
     <h3>Active Threads</h3>
     <table id="threads-table">
       <thead>
-        <tr><th>ID</th><th>Name</th><th>Model</th><th>Last Active</th><th>CWD</th></tr>
+        <tr><th>ID</th><th>Name</th><th>Model</th><th>Last Active</th><th>Session</th><th>CWD</th></tr>
       </thead>
       <tbody id="threads-tbody"></tbody>
     </table>
@@ -565,6 +565,16 @@ tr.clickable { cursor: pointer; }
     <h2 id="thread-title">Thread Detail</h2>
     <div class="thread-header" id="thread-header-info"></div>
     <div class="chat-container" id="thread-chat"></div>
+    <h3 style="margin-top:16px;display:flex;align-items:center;gap:8px;cursor:pointer;" id="session-logs-toggle">
+      Session Logs <span id="session-logs-arrow" style="font-size:10px;transition:transform 0.2s;">&#9654;</span>
+    </h3>
+    <div id="session-logs-container" style="display:none;">
+      <div class="feed-controls">
+        <button id="session-logs-refresh">Refresh</button>
+        <span id="session-logs-meta" style="color:var(--text-secondary);font-size:11px;"></span>
+      </div>
+      <div class="feed-list" id="session-logs-list" style="max-height:400px;font-size:11px;"></div>
+    </div>
   </div>
 
   <!-- View: Routing -->
@@ -929,17 +939,21 @@ tr.clickable { cursor: pointer; }
     });
 
     if (sorted.length === 0) {
-      rows = '<tr><td colspan="5" class="empty-state">No active threads</td></tr>';
+      rows = '<tr><td colspan="6" class="empty-state">No active threads</td></tr>';
     }
 
     for (var i = 0; i < sorted.length; i++) {
       var t = sorted[i];
       var id = t.id || '';
+      var sessionBadge = t.sessionId
+        ? '<span class="badge badge-green" title="' + escapeHtml(t.sessionId) + '">active</span>'
+        : '<span class="badge badge-red">none</span>';
       rows += '<tr class="clickable" data-thread-id="' + escapeHtml(String(id)) + '">' +
         '<td>' + escapeHtml(String(id)) + '</td>' +
         '<td>' + escapeHtml(t.name || '') + (t.isMaster ? ' <span class="badge badge-yellow">master</span>' : '') + '</td>' +
         '<td>' + modelBadge(t.model) + '</td>' +
         '<td>' + relativeTime(t.lastActive) + '</td>' +
+        '<td>' + sessionBadge + '</td>' +
         '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(t.cwd || '') + '">' + escapeHtml(t.cwd || '') + '</td>' +
         '</tr>';
     }
@@ -960,7 +974,7 @@ tr.clickable { cursor: pointer; }
       '<div class="stat-card"><div class="label">Status</div><div class="value" style="color:var(--accent-red)">Offline</div></div>';
     document.getElementById('overview-queue').innerHTML = '';
     document.getElementById('threads-tbody').innerHTML =
-      '<tr><td colspan="5" class="empty-state">Cannot reach API server</td></tr>';
+      '<tr><td colspan="6" class="empty-state">Cannot reach API server</td></tr>';
   }
 
   // ─── View 2: Live Feed ───
@@ -1118,6 +1132,105 @@ tr.clickable { cursor: pointer; }
 
     chat.innerHTML = html;
     chat.scrollTop = chat.scrollHeight;
+
+    // ─── Session Logs (in thread detail) ───
+    var logsContainer = document.getElementById('session-logs-container');
+    var logsToggle = document.getElementById('session-logs-toggle');
+    var logsArrow = document.getElementById('session-logs-arrow');
+    var logsOpen = false;
+
+    logsToggle.onclick = function() {
+      logsOpen = !logsOpen;
+      logsContainer.style.display = logsOpen ? 'block' : 'none';
+      logsArrow.style.transform = logsOpen ? 'rotate(90deg)' : '';
+      if (logsOpen) fetchSessionLogs(threadId);
+    };
+
+    document.getElementById('session-logs-refresh').onclick = function() {
+      fetchSessionLogs(threadId);
+    };
+  }
+
+  async function fetchSessionLogs(threadId) {
+    var data = await api('/api/threads/' + threadId + '/session-logs?n=30');
+    var list = document.getElementById('session-logs-list');
+    var meta = document.getElementById('session-logs-meta');
+
+    if (!data || data.error) {
+      list.innerHTML = '<div class="empty-state">' + escapeHtml(data ? data.error : 'Could not fetch logs') + '</div>';
+      meta.textContent = '';
+      return;
+    }
+
+    meta.textContent = 'session: ' + (data.sessionId || '?').substring(0, 8) + '... | ' + data.lines.length + ' lines';
+
+    if (data.lines.length === 0) {
+      list.innerHTML = '<div class="empty-state">No log entries</div>';
+      return;
+    }
+
+    var html = '';
+    for (var i = 0; i < data.lines.length; i++) {
+      var line = data.lines[i];
+      var cls = 'info';
+
+      // Try to parse and format JSONL entries
+      var display = line;
+      try {
+        var parsed = JSON.parse(line);
+        if (parsed.type) {
+          // SDK message format — show type and key fields
+          var typeBadge = '<span class="badge badge-blue">' + escapeHtml(parsed.type) + '</span>';
+          if (parsed.subtype) typeBadge += ' <span class="badge badge-green">' + escapeHtml(parsed.subtype) + '</span>';
+
+          var summary = '';
+          if (parsed.type === 'assistant' && parsed.message && parsed.message.content) {
+            var textBlocks = parsed.message.content.filter(function(b) { return b.type === 'text'; });
+            if (textBlocks.length > 0) summary = truncate(textBlocks[0].text || '', 120);
+            var toolBlocks = parsed.message.content.filter(function(b) { return b.type === 'tool_use'; });
+            if (toolBlocks.length > 0) summary = (summary ? summary + ' | ' : '') + toolBlocks.map(function(b) { return b.name; }).join(', ');
+          } else if (parsed.type === 'user' && parsed.message && parsed.message.content) {
+            var uTextBlocks = parsed.message.content.filter(function(b) { return b.type === 'text'; });
+            if (uTextBlocks.length > 0) summary = truncate(uTextBlocks[0].text || '', 120);
+          } else if (parsed.type === 'result') {
+            summary = truncate(parsed.result || '', 120);
+            if (parsed.subtype === 'error') cls = 'error';
+          }
+
+          html += '<div class="log-line ' + cls + '" style="cursor:pointer;" data-raw="' + escapeHtml(line).replace(/"/g, '&quot;') + '">' +
+            typeBadge + ' ' + escapeHtml(summary) +
+          '</div>';
+          continue;
+        }
+      } catch(e) { /* not JSON, show raw */ }
+
+      html += '<div class="log-line ' + cls + '">' + escapeHtml(truncate(display, 200)) + '</div>';
+    }
+
+    list.innerHTML = html;
+
+    // Click to expand raw JSON
+    list.querySelectorAll('.log-line[data-raw]').forEach(function(el) {
+      el.onclick = function() {
+        var raw = el.getAttribute('data-raw');
+        if (el.classList.contains('expanded')) {
+          // Collapse back to summary
+          el.classList.remove('expanded');
+          var origHtml = el.innerHTML.split('<pre')[0];
+          el.innerHTML = origHtml;
+        } else {
+          el.classList.add('expanded');
+          try {
+            var formatted = JSON.stringify(JSON.parse(raw), null, 2);
+            el.innerHTML += '<pre style="margin-top:6px;font-size:10px;max-height:300px;overflow:auto;white-space:pre-wrap;background:var(--bg-primary);padding:8px;border-radius:4px;">' + escapeHtml(formatted) + '</pre>';
+          } catch(e) {
+            el.innerHTML += '<pre style="margin-top:6px;font-size:10px;">' + escapeHtml(raw) + '</pre>';
+          }
+        }
+      };
+    });
+
+    list.scrollTop = list.scrollHeight;
   }
 
   // ─── View 4: Routing Inspector ───
