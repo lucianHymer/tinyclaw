@@ -2,6 +2,8 @@
 
 Turn a Telegram forum into a multi-repo Claude Code environment. Each topic is a persistent agent session running in a specific repo on your server -- with cross-thread communication, smart model routing, and transparent GitHub auth.
 
+![TinyClaw demo](docs/demo.gif)
+
 A fork of the original [TinyClaw](https://github.com/lucianHymer/tinyclaw/tree/986b10f) by **Jian**, rebuilt from the ground up.
 
 ```
