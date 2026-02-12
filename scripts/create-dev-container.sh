@@ -52,7 +52,7 @@ docker run -d \
     --cpus 2 \
     --cap-drop NET_RAW \
     -e CREDENTIAL_BROKER_URL=http://broker:3000 \
-    -e BROKER_SECRET="${BROKER_SECRET}" \
+    -v "/secrets/broker-env.sh:/etc/profile.d/broker-env.sh:ro" \
     -v "/secrets/github-installations.json:/secrets/github-installations.json:ro" \
     --restart unless-stopped \
     tinyclaw-dev
