@@ -22,7 +22,7 @@ import type {
 import { route, DEFAULT_ROUTING_CONFIG, maxTier } from "./router/index.js";
 import type { Tier, RoutingDecision } from "./router/index.js";
 import { logDecision } from "./routing-logger.js";
-import { toErrorMessage } from "./types.js";
+import { toErrorMessage, isValidSessionId } from "./types.js";
 import type { IncomingMessage, OutgoingMessage } from "./types.js";
 import {
   appendHistory,
@@ -42,6 +42,34 @@ import {
   buildHeartbeatPrompt,
 } from "./session-manager.js";
 import type { ThreadConfig } from "./session-manager.js";
+import { z } from "zod/v4";
+
+// ─── Zod Schemas for Queue Messages ───
+
+const MessageSourceSchema = z.enum(["user", "cross-thread", "heartbeat", "cli", "system"]);
+
+const IncomingMessageSchema = z.object({
+  channel: z.string(),
+  source: MessageSourceSchema.optional(),
+  threadId: z.number(),
+  sourceThreadId: z.number().optional(),
+  sender: z.string(),
+  senderId: z.string().optional(),
+  message: z.string(),
+  isReply: z.boolean().optional(),
+  replyToText: z.string().optional(),
+  replyToModel: z.string().optional(),
+  topicName: z.string().optional(),
+  timestamp: z.number(),
+  messageId: z.string(),
+});
+
+const CommandMessageSchema = z.object({
+  command: z.string(),
+  threadId: z.number(),
+  args: z.record(z.string(), z.string()).optional(),
+  timestamp: z.number(),
+});
 
 // ─── Paths ───
 
@@ -136,9 +164,21 @@ const syncOffsets = new Map<string, number>();
 
 function syncSessionLog(sessionId: string, cwd: string): void {
   try {
+    // Validate sessionId format (UUID) to prevent path traversal
+    if (!isValidSessionId(sessionId)) return;
+
     const slug = cwdToProjectSlug(cwd);
-    const src = path.join(CLAUDE_HOME, "projects", slug, `${sessionId}.jsonl`);
-    const dest = path.join(SESSIONS_DIR, `${sessionId}.jsonl`);
+    const safeId = path.basename(sessionId); // defense in depth
+    const src = path.join(CLAUDE_HOME, "projects", slug, `${safeId}.jsonl`);
+    const dest = path.join(SESSIONS_DIR, `${safeId}.jsonl`);
+
+    // Verify resolved paths stay within intended directories
+    const resolvedSrc = path.resolve(src);
+    const resolvedDest = path.resolve(dest);
+    const resolvedSessionsDir = path.resolve(SESSIONS_DIR);
+    const resolvedProjectsDir = path.resolve(CLAUDE_HOME, "projects");
+    if (!resolvedDest.startsWith(resolvedSessionsDir + path.sep)) return;
+    if (!resolvedSrc.startsWith(resolvedProjectsDir + path.sep)) return;
 
     if (!fs.existsSync(src)) return;
 
@@ -291,7 +331,7 @@ function formatCurrentTime(): string {
 // ─── Source-Aware Prefix ───
 
 function buildSourcePrefix(msg: IncomingMessage): string {
-  const prefixMap: Record<string, string> = {
+  const prefixMap: Record<MessageSource, string> = {
     user: `[${msg.sender} via Telegram]:`,
     "cross-thread": `[Cross-thread from ${msg.sender} (thread ${msg.sourceThreadId})]:`,
     heartbeat: `[Heartbeat check-in]:`,
@@ -517,9 +557,14 @@ async function processMessage(messageFile: string): Promise<void> {
 
   let msg: IncomingMessage;
   try {
-    msg = JSON.parse(
-      fs.readFileSync(processingFile, "utf8"),
-    ) as IncomingMessage;
+    const raw: unknown = JSON.parse(fs.readFileSync(processingFile, "utf8"));
+    const parsed = IncomingMessageSchema.safeParse(raw);
+    if (!parsed.success) {
+      log("ERROR", `Invalid message shape in ${filename}: ${parsed.error.message}`);
+      moveToDeadLetter(processingFile, filename);
+      return;
+    }
+    msg = parsed.data;
   } catch (err) {
     log("ERROR", `Failed to parse ${filename}: ${toErrorMessage(err)}`);
     moveToDeadLetter(processingFile, filename);
@@ -811,12 +856,14 @@ async function processCommands(): Promise<void> {
   for (const file of files) {
     const filePath = path.join(QUEUE_COMMANDS, file);
     try {
-      const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
-        command: string;
-        threadId: number;
-        args?: Record<string, string>;
-        timestamp: number;
-      };
+      const raw: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      const parsed = CommandMessageSchema.safeParse(raw);
+      if (!parsed.success) {
+        log("WARN", `Invalid command shape in ${file}: ${parsed.error.message}`);
+        fs.unlinkSync(filePath);
+        continue;
+      }
+      const data = parsed.data;
 
       if (data.command === "reset") {
         resetThread(data.threadId);
@@ -890,7 +937,10 @@ async function processQueue(): Promise<void> {
       // Peek at message to get threadId for per-thread serialization
       let msg: IncomingMessage;
       try {
-        msg = JSON.parse(fs.readFileSync(file.path, "utf8")) as IncomingMessage;
+        const raw: unknown = JSON.parse(fs.readFileSync(file.path, "utf8"));
+        const parsed = IncomingMessageSchema.safeParse(raw);
+        if (!parsed.success) continue; // Skip malformed messages — processMessage will handle them
+        msg = parsed.data;
       } catch {
         continue; // File may have been picked up by a concurrent scan
       }

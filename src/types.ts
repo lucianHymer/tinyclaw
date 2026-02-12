@@ -34,7 +34,29 @@ export interface OutgoingMessage {
     targetThreadId?: number;
 }
 
+// ─── Validation Utilities ───
+
+/**
+ * Validate that a sessionId is a well-formed UUID (hex + hyphens, 36 chars).
+ * Session IDs from the Claude SDK are UUIDs; anything else is suspicious.
+ */
+export function isValidSessionId(sessionId: string): boolean {
+    return /^[a-f0-9-]{36}$/.test(sessionId);
+}
+
 // ─── Error Utility ───
+
+/**
+ * Error subclass for user-facing validation failures (e.g., invalid input).
+ * Handlers can use `instanceof ValidationError` to distinguish client errors (400)
+ * from upstream/infrastructure errors (502) without string matching.
+ */
+export class ValidationError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "ValidationError";
+    }
+}
 
 /**
  * Safely extract an error message from an unknown thrown value.

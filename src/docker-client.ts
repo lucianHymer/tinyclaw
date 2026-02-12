@@ -4,6 +4,8 @@
  * All functions accept a baseUrl parameter — no hardcoded Docker endpoint.
  */
 
+import { ValidationError } from "./types.js";
+
 // ─── Constants ───
 
 export const MIN_MEMORY_BYTES = 256 * 1024 * 1024; // 256MB minimum per container
@@ -238,7 +240,7 @@ export async function validateAndUpdateMemory(
 ): Promise<MemoryUpdateResult> {
     // Minimum memory check
     if (newLimitBytes < MIN_MEMORY_BYTES) {
-        throw new Error(`Limit too low. Minimum is ${formatBytes(MIN_MEMORY_BYTES)}`);
+        throw new ValidationError(`Limit too low. Minimum is ${formatBytes(MIN_MEMORY_BYTES)}`);
     }
 
     // Snap to 64MB increment
@@ -272,7 +274,7 @@ export async function validateAndUpdateMemory(
     const newTotal = otherContainersTotal + snappedLimit;
 
     if (newTotal > maxAllocatable) {
-        throw new Error(
+        throw new ValidationError(
             `Total allocation would be ${formatBytes(newTotal)}, exceeding max ${formatBytes(maxAllocatable)} (host ${formatBytes(hostTotalBytes)} - ${formatBytes(OS_RESERVE_BYTES)} OS reserve)`,
         );
     }

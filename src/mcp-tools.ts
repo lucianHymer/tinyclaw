@@ -16,78 +16,15 @@ import {
     OS_RESERVE_BYTES,
     validateAndUpdateMemory,
 } from "./docker-client.js";
+import { parseMeminfo, parseCpuPercent, getDiskUsage, countQueueFiles } from "./host-metrics.js";
+import { loadThreads } from "./session-manager.js";
+import { toErrorMessage } from "./types.js";
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(PROJECT_DIR, ".tinyclaw");
-const THREADS_FILE = path.join(TINYCLAW_DIR, "threads.json");
 const QUEUE_INCOMING = path.join(TINYCLAW_DIR, "queue/incoming");
 const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://docker-proxy:2375";
-const PROC_BASE = fs.existsSync("/host/proc") ? "/host/proc" : "/proc";
-const PROC_MEMINFO = path.join(PROC_BASE, "meminfo");
-
-function parseMeminfo(): { totalBytes: number; availableBytes: number } {
-    try {
-        const content = fs.readFileSync(PROC_MEMINFO, "utf8");
-        const get = (key: string): number => {
-            const match = content.match(new RegExp(`${key}:\\s+(\\d+)`));
-            return match ? parseInt(match[1], 10) * 1024 : 0; // kB -> bytes
-        };
-        return { totalBytes: get("MemTotal"), availableBytes: get("MemAvailable") };
-    } catch {
-        return { totalBytes: 0, availableBytes: 0 };
-    }
-}
-
-function getHostTotalMemoryBytes(): number {
-    return parseMeminfo().totalBytes;
-}
-
-let prevCpuIdle = 0;
-let prevCpuTotal = 0;
-
-function parseCpuPercent(): number {
-    try {
-        const content = fs.readFileSync(path.join(PROC_BASE, "stat"), "utf8");
-        const line = content.split("\n").find(l => l.startsWith("cpu "));
-        if (!line) return 0;
-        const parts = line.split(/\s+/).slice(1).map(Number);
-        const idle = parts[3] + (parts[4] || 0); // idle + iowait
-        const total = parts.reduce((a, b) => a + b, 0);
-        const diffIdle = idle - prevCpuIdle;
-        const diffTotal = total - prevCpuTotal;
-        prevCpuIdle = idle;
-        prevCpuTotal = total;
-        if (diffTotal === 0) return 0;
-        return Math.round((1 - diffIdle / diffTotal) * 100);
-    } catch {
-        return 0;
-    }
-}
-
-function getDiskUsage(): { totalGB: number; usedGB: number; availGB: number } {
-    try {
-        const stats = fs.statfsSync(TINYCLAW_DIR);
-        const blockSize = stats.bsize;
-        const totalGB = Math.round((stats.blocks * blockSize) / 1024 ** 3 * 10) / 10;
-        const availGB = Math.round((stats.bavail * blockSize) / 1024 ** 3 * 10) / 10;
-        return { totalGB, usedGB: Math.round((totalGB - availGB) * 10) / 10, availGB };
-    } catch {
-        return { totalGB: 0, usedGB: 0, availGB: 0 };
-    }
-}
-
-function countQueueFiles(dir: string): number {
-    try {
-        return fs.readdirSync(dir).filter(f => f.endsWith(".json")).length;
-    } catch {
-        return 0;
-    }
-}
-
-function readThreads(): Record<string, { name: string; cwd: string; isMaster?: boolean }> {
-    return JSON.parse(fs.readFileSync(THREADS_FILE, "utf8"));
-}
 
 function textContent(text: string) {
     return { type: "text" as const, text };
@@ -110,9 +47,9 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 };
             }
 
-            let threads: ReturnType<typeof readThreads>;
+            let threads: ReturnType<typeof loadThreads>;
             try {
-                threads = readThreads();
+                threads = loadThreads();
             } catch {
                 return { content: [textContent("Could not read threads.json")], isError: true };
             }
@@ -176,7 +113,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         {},
         async () => {
             try {
-                const threads = readThreads();
+                const threads = loadThreads();
                 const lines = Object.entries(threads).map(([id, t]) => {
                     const parts = [`Thread ${id}: ${t.name}`];
                     if (t.isMaster) parts.push("(master)");
@@ -197,7 +134,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         { filename: z.enum(["context.md", "decisions.md", "active-projects.md"]) },
         async ({ filename }) => {
             try {
-                const masterConfig = readThreads()["1"];
+                const masterConfig = loadThreads()["1"];
                 if (!masterConfig?.cwd) {
                     return {
                         content: [textContent("Master thread (thread 1) not found or has no cwd configured")],
@@ -208,7 +145,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 const content = fs.readFileSync(filePath, "utf-8");
                 return { content: [textContent(content)] };
             } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = toErrorMessage(err);
                 return {
                     content: [textContent(`Could not read knowledge base file "${filename}": ${msg}`)],
                     isError: true,
@@ -217,7 +154,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         },
     );
 
-    // ─── Master-only tools: container management ───
+    // ─── Container & system tools (read-only ones available to all threads) ───
 
     const getContainerStats = tool(
         "get_container_stats",
@@ -243,7 +180,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
                 return { content: [textContent(lines.join("\n"))] };
             } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = toErrorMessage(err);
                 return {
                     content: [textContent(`Failed to get container stats: ${msg}`)],
                     isError: true,
@@ -275,7 +212,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 }
 
                 // Validate and apply the update with full safety checks
-                const hostTotal = getHostTotalMemoryBytes();
+                const hostTotal = parseMeminfo().totalBytes;
                 const result = await validateAndUpdateMemory(
                     DOCKER_PROXY_URL,
                     match.Id,
@@ -290,7 +227,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
                 return { content: [textContent(parts.join("\n"))] };
             } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = toErrorMessage(err);
                 return {
                     content: [textContent(`Failed to update container memory: ${msg}`)],
                     isError: true,
@@ -317,7 +254,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
                 return { content: [textContent(lines.join("\n"))] };
             } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = toErrorMessage(err);
                 return {
                     content: [textContent(`Failed to read host memory: ${msg}`)],
                     isError: true,
@@ -335,7 +272,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 const cpuPercent = parseCpuPercent();
                 const { totalBytes, availableBytes } = parseMeminfo();
                 const usedBytes = totalBytes - availableBytes;
-                const disk = getDiskUsage();
+                const disk = getDiskUsage(TINYCLAW_DIR);
                 const loadAvg = os.loadavg();
 
                 const queueIncoming = countQueueFiles(QUEUE_INCOMING);
@@ -366,7 +303,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
                 return { content: [textContent(lines.join("\n"))] };
             } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = toErrorMessage(err);
                 return {
                     content: [textContent(`Failed to get system status: ${msg}`)],
                     isError: true,
@@ -375,11 +312,14 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         },
     );
 
-    // Build tool list: base tools for all threads, container tools for master only
+    // Build tool list: base tools + read-only monitoring for all threads, mutating tools for master only
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous tool schemas require type erasure
-    const tools: Array<ReturnType<typeof tool<any>>> = [sendMessage, listThreads, queryKnowledgeBase];
+    const tools: Array<ReturnType<typeof tool<any>>> = [
+        sendMessage, listThreads, queryKnowledgeBase,
+        getContainerStats, getSystemStatus,
+    ];
     if (sourceThreadId === 1) {
-        tools.push(getContainerStats, updateContainerMemory, getHostMemory, getSystemStatus);
+        tools.push(updateContainerMemory, getHostMemory);
     }
 
     return createSdkMcpServer({

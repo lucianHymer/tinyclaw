@@ -16,6 +16,8 @@ import {
     validateAndUpdateMemory,
     OS_RESERVE_BYTES,
 } from "./docker-client.js";
+import { parseMeminfo, parseCpuPercent, getDiskUsage, countQueueFiles, PROC_BASE } from "./host-metrics.js";
+import { toErrorMessage, isValidSessionId, ValidationError } from "./types.js";
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
@@ -61,48 +63,7 @@ function readRecentJsonl<T = unknown>(filePath: string, n: number): T[] {
     }
 }
 
-// ─── Host Metrics Parsers ───
-// Read from /host/proc/* (bind-mounted in Docker) or fall back to /proc/*
-
-const PROC_BASE = fs.existsSync("/host/proc") ? "/host/proc" : "/proc";
-
-function parseMeminfo(): { totalBytes: number; availableBytes: number } {
-    try {
-        const content = fs.readFileSync(path.join(PROC_BASE, "meminfo"), "utf8");
-        const get = (key: string): number => {
-            const match = content.match(new RegExp(`${key}:\\s+(\\d+)`));
-            return match ? parseInt(match[1], 10) * 1024 : 0; // kB -> bytes
-        };
-        return {
-            totalBytes: get("MemTotal"),
-            availableBytes: get("MemAvailable"),
-        };
-    } catch {
-        return { totalBytes: 0, availableBytes: 0 };
-    }
-}
-
-let prevCpuIdle = 0;
-let prevCpuTotal = 0;
-
-function parseCpuPercent(): number {
-    try {
-        const content = fs.readFileSync(path.join(PROC_BASE, "stat"), "utf8");
-        const line = content.split("\n").find(l => l.startsWith("cpu "));
-        if (!line) return 0;
-        const parts = line.split(/\s+/).slice(1).map(Number);
-        const idle = parts[3] + (parts[4] || 0); // idle + iowait
-        const total = parts.reduce((a, b) => a + b, 0);
-        const diffIdle = idle - prevCpuIdle;
-        const diffTotal = total - prevCpuTotal;
-        prevCpuIdle = idle;
-        prevCpuTotal = total;
-        if (diffTotal === 0) return 0;
-        return Math.round((1 - diffIdle / diffTotal) * 100);
-    } catch {
-        return 0;
-    }
-}
+// ─── Host Metrics (dashboard-local) ───
 
 function parseLoadAvg(): { load1: number; load5: number; load15: number } {
     try {
@@ -118,27 +79,7 @@ function parseLoadAvg(): { load1: number; load5: number; load15: number } {
     }
 }
 
-function getDiskUsage(): { totalGB: number; usedGB: number; availGB: number } {
-    try {
-        const stats = fs.statfsSync(TINYCLAW_DIR);
-        const blockSize = stats.bsize;
-        const totalGB = Math.round((stats.blocks * blockSize) / 1024 ** 3 * 10) / 10;
-        const availGB = Math.round((stats.bavail * blockSize) / 1024 ** 3 * 10) / 10;
-        return { totalGB, usedGB: Math.round((totalGB - availGB) * 10) / 10, availGB };
-    } catch {
-        return { totalGB: 0, usedGB: 0, availGB: 0 };
-    }
-}
-
 // ─── Helpers ───
-
-function countFiles(dir: string): number {
-    try {
-        return fs.readdirSync(dir).filter(f => f.endsWith(".json")).length;
-    } catch {
-        return 0;
-    }
-}
 
 function readJsonSafe<T>(filePath: string, fallback: T): T {
     try {
@@ -203,13 +144,13 @@ app.get("/api/status", (_req, res) => {
         path.join(TINYCLAW_DIR, "threads.json"),
         {},
     );
-    const queueIncoming = countFiles(path.join(TINYCLAW_DIR, "queue/incoming"));
-    const queueProcessing = countFiles(path.join(TINYCLAW_DIR, "queue/processing"));
-    const queueDeadLetter = countFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
+    const queueIncoming = countQueueFiles(path.join(TINYCLAW_DIR, "queue/incoming"));
+    const queueProcessing = countQueueFiles(path.join(TINYCLAW_DIR, "queue/processing"));
+    const queueDeadLetter = countQueueFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
     const memBytes = parseMeminfo();
     const cpu = parseCpuPercent();
     const load = parseLoadAvg();
-    const disk = getDiskUsage();
+    const disk = getDiskUsage(TINYCLAW_DIR);
     const mem = {
         totalMB: Math.round(memBytes.totalBytes / 1024 / 1024),
         usedMB: Math.round((memBytes.totalBytes - memBytes.availableBytes) / 1024 / 1024),
@@ -258,7 +199,7 @@ app.get("/api/messages/recent", (req, res) => {
     res.json(entries);
 });
 
-// GET /api/messages/feed — SSE stream of new messages
+// GET /api/messages/feed — SSE stream of new messages (broadcast pattern)
 app.get("/api/messages/feed", (_req, res) => {
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -268,35 +209,25 @@ app.get("/api/messages/feed", (_req, res) => {
     res.write(":\n\n"); // SSE comment to establish connection
 
     const historyFile = path.join(TINYCLAW_DIR, "message-history.jsonl");
-    const clientState: TailState = { offset: 0 };
+    const tailState: TailState = { offset: 0 };
 
     // Initialize to current EOF so we only send new messages
     if (fs.existsSync(historyFile)) {
         const stat = fs.statSync(historyFile);
-        clientState.offset = stat.size;
+        tailState.offset = stat.size;
     }
 
-    const interval = setInterval(() => {
-        const content = readNewBytes(historyFile, clientState);
-        if (content === null) return;
-
-        const lines = content.split("\n").filter(l => l.trim());
-        for (const line of lines) {
-            try {
-                JSON.parse(line); // validate JSON
-                res.write(`data: ${line}\n\n`);
-            } catch {
-                /* skip malformed */
-            }
-        }
-    }, 2000);
+    const client: FeedClient = { res, tailState };
+    messageFeedClients.add(client);
+    startMessageFeed();
 
     _req.on("close", () => {
-        clearInterval(interval);
+        messageFeedClients.delete(client);
+        stopMessageFeedIfIdle();
     });
 });
 
-// GET /api/routing/feed — SSE stream of routing decisions
+// GET /api/routing/feed — SSE stream of routing decisions (broadcast pattern)
 app.get("/api/routing/feed", (_req, res) => {
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -306,30 +237,20 @@ app.get("/api/routing/feed", (_req, res) => {
     res.write(":\n\n");
 
     const routingFile = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
-    const clientState: TailState = { offset: 0 };
+    const tailState: TailState = { offset: 0 };
 
     if (fs.existsSync(routingFile)) {
         const stat = fs.statSync(routingFile);
-        clientState.offset = stat.size;
+        tailState.offset = stat.size;
     }
 
-    const interval = setInterval(() => {
-        const content = readNewBytes(routingFile, clientState);
-        if (content === null) return;
-
-        const lines = content.split("\n").filter(l => l.trim());
-        for (const line of lines) {
-            try {
-                JSON.parse(line); // validate
-                res.write(`data: ${line}\n\n`);
-            } catch {
-                /* skip malformed */
-            }
-        }
-    }, 2000);
+    const client: FeedClient = { res, tailState };
+    routingFeedClients.add(client);
+    startRoutingFeed();
 
     _req.on("close", () => {
-        clearInterval(interval);
+        routingFeedClients.delete(client);
+        stopRoutingFeedIfIdle();
     });
 });
 
@@ -358,16 +279,16 @@ app.get("/api/metrics", (_req, res) => {
             availableMB: Math.round(memBytes.availableBytes / 1024 / 1024),
         },
         load: parseLoadAvg(),
-        disk: getDiskUsage(),
+        disk: getDiskUsage(TINYCLAW_DIR),
         timestamp: Date.now(),
     });
 });
 
 // ─── Docker Container Management ───
 
-function parseMemoryLimit(limit: string): number {
+function parseMemoryLimit(limit: string): number | null {
     const match = limit.match(/^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)?$/i);
-    if (!match) return 0;
+    if (!match) return null;
     const num = parseFloat(match[1]);
     const unit = (match[2] || "b").toLowerCase();
     switch (unit) {
@@ -385,7 +306,125 @@ function parseMemoryLimit(limit: string): number {
     }
 }
 
-// ─── SSE Container Feed (server-side polling with broadcast) ───
+// ─── SSE Broadcast Infrastructure ───
+
+// Per-client state for JSONL tail feeds (each client tracks its own byte offset)
+interface FeedClient {
+    res: http.ServerResponse;
+    tailState: TailState;
+}
+
+// ─── Message Feed (broadcast pattern) ───
+
+const messageFeedClients = new Set<FeedClient>();
+let messageFeedInterval: ReturnType<typeof setInterval> | null = null;
+
+function startMessageFeed(): void {
+    if (messageFeedInterval) return;
+    const historyFile = path.join(TINYCLAW_DIR, "message-history.jsonl");
+    messageFeedInterval = setInterval(() => {
+        if (messageFeedClients.size === 0) return;
+        for (const client of messageFeedClients) {
+            const content = readNewBytes(historyFile, client.tailState);
+            if (content === null) continue;
+            const lines = content.split("\n").filter(l => l.trim());
+            for (const line of lines) {
+                try { JSON.parse(line); } catch { continue; } // skip malformed
+                try {
+                    client.res.write(`data: ${line}\n\n`);
+                } catch {
+                    messageFeedClients.delete(client);
+                    break;
+                }
+            }
+        }
+    }, 2000);
+}
+
+function stopMessageFeedIfIdle(): void {
+    if (messageFeedClients.size === 0 && messageFeedInterval) {
+        clearInterval(messageFeedInterval);
+        messageFeedInterval = null;
+    }
+}
+
+// ─── Routing Feed (broadcast pattern) ───
+
+const routingFeedClients = new Set<FeedClient>();
+let routingFeedInterval: ReturnType<typeof setInterval> | null = null;
+
+function startRoutingFeed(): void {
+    if (routingFeedInterval) return;
+    const routingFile = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
+    routingFeedInterval = setInterval(() => {
+        if (routingFeedClients.size === 0) return;
+        for (const client of routingFeedClients) {
+            const content = readNewBytes(routingFile, client.tailState);
+            if (content === null) continue;
+            const lines = content.split("\n").filter(l => l.trim());
+            for (const line of lines) {
+                try { JSON.parse(line); } catch { continue; } // skip malformed
+                try {
+                    client.res.write(`data: ${line}\n\n`);
+                } catch {
+                    routingFeedClients.delete(client);
+                    break;
+                }
+            }
+        }
+    }, 2000);
+}
+
+function stopRoutingFeedIfIdle(): void {
+    if (routingFeedClients.size === 0 && routingFeedInterval) {
+        clearInterval(routingFeedInterval);
+        routingFeedInterval = null;
+    }
+}
+
+// ─── Log Feed (broadcast pattern, one group per log type) ───
+
+const logFeedClients: Record<string, Set<FeedClient>> = {};
+const logFeedIntervals: Record<string, ReturnType<typeof setInterval>> = {};
+
+function getLogFilePath(type: string): string {
+    return type === "telegram"
+        ? path.join(TINYCLAW_DIR, "logs/telegram.log")
+        : path.join(TINYCLAW_DIR, "logs/queue.log");
+}
+
+function startLogFeed(type: string): void {
+    if (logFeedIntervals[type]) return;
+    if (!logFeedClients[type]) logFeedClients[type] = new Set();
+    const logFile = getLogFilePath(type);
+    logFeedIntervals[type] = setInterval(() => {
+        const clients = logFeedClients[type];
+        if (!clients || clients.size === 0) return;
+        for (const client of clients) {
+            const content = readNewBytes(logFile, client.tailState);
+            if (content === null) continue;
+            const lines = content.split("\n").filter(l => l.trim());
+            for (const line of lines) {
+                try {
+                    client.res.write(`data: ${JSON.stringify(line)}\n\n`);
+                } catch {
+                    clients.delete(client);
+                    break;
+                }
+            }
+        }
+    }, 2000);
+}
+
+function stopLogFeedIfIdle(type: string): void {
+    const clients = logFeedClients[type];
+    if ((!clients || clients.size === 0) && logFeedIntervals[type]) {
+        clearInterval(logFeedIntervals[type]);
+        delete logFeedIntervals[type];
+    }
+}
+
+// ─── Container Feed (server-side polling with broadcast) ───
 
 const containerFeedClients = new Set<http.ServerResponse>();
 let containerFeedInterval: ReturnType<typeof setInterval> | null = null;
@@ -449,7 +488,7 @@ app.get("/api/containers", async (_req, res) => {
             },
         });
     } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = toErrorMessage(err);
         res.status(502).json({ error: "Failed to fetch containers", detail: msg });
     }
 });
@@ -480,7 +519,7 @@ app.get("/api/containers/:id/stats", async (req, res) => {
             pids: stats.pids_stats?.current || 0,
         });
     } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = toErrorMessage(err);
         res.status(502).json({ error: "Failed to fetch container stats", detail: msg });
     }
 });
@@ -500,6 +539,10 @@ app.post("/api/containers/:id/memory", async (req, res) => {
         }
 
         const newLimitBytes = parseMemoryLimit(limitStr);
+        if (newLimitBytes === null) {
+            res.status(400).json({ error: "Invalid memory limit format. Use e.g. '4g', '2048m', '1.5gb'" });
+            return;
+        }
         const hostMem = parseMeminfo();
 
         const result = await validateAndUpdateMemory(
@@ -511,10 +554,8 @@ app.post("/api/containers/:id/memory", async (req, res) => {
 
         res.json(result);
     } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // Validation errors from validateAndUpdateMemory are user errors (400),
-        // Docker API failures are upstream errors (502)
-        const status = msg.startsWith("Limit too low") || msg.startsWith("Total allocation") ? 400 : 502;
+        const msg = toErrorMessage(err);
+        const status = err instanceof ValidationError ? 400 : 502;
         res.status(status).json({ error: msg });
     }
 });
@@ -552,7 +593,17 @@ app.get("/api/containers/feed", (_req, res) => {
 // ─── Session Log Helpers ───
 
 function findSessionLogFile(sessionId: string): string | null {
-    const logFile = path.join(SESSIONS_DIR, `${sessionId}.jsonl`);
+    // Validate sessionId format (UUID) to prevent path traversal
+    if (!isValidSessionId(sessionId)) return null;
+
+    const safeId = path.basename(sessionId); // defense in depth
+    const logFile = path.join(SESSIONS_DIR, `${safeId}.jsonl`);
+
+    // Verify resolved path stays within SESSIONS_DIR
+    const resolvedPath = path.resolve(logFile);
+    const resolvedSessionsDir = path.resolve(SESSIONS_DIR);
+    if (!resolvedPath.startsWith(resolvedSessionsDir + path.sep)) return null;
+
     if (fs.existsSync(logFile)) return logFile;
     return null;
 }
@@ -627,13 +678,10 @@ app.get("/api/session-logs", (req, res) => {
     res.json(results);
 });
 
-// GET /api/logs/:type — SSE stream of log files (telegram | queue)
+// GET /api/logs/:type — SSE stream of log files (telegram | queue) (broadcast pattern)
 app.get("/api/logs/:type", (req, res) => {
     const type = req.params.type;
-    const logFile =
-        type === "telegram"
-            ? path.join(TINYCLAW_DIR, "logs/telegram.log")
-            : path.join(TINYCLAW_DIR, "logs/queue.log");
+    const logFile = getLogFilePath(type);
 
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -642,26 +690,22 @@ app.get("/api/logs/:type", (req, res) => {
     });
     res.write(":\n\n");
 
-    const clientState: TailState = { offset: 0 };
+    const tailState: TailState = { offset: 0 };
 
     if (fs.existsSync(logFile)) {
         const stat = fs.statSync(logFile);
         // Start from last 4KB to show some initial context
-        clientState.offset = Math.max(0, stat.size - 4096);
+        tailState.offset = Math.max(0, stat.size - 4096);
     }
 
-    const interval = setInterval(() => {
-        const content = readNewBytes(logFile, clientState);
-        if (content === null) return;
-
-        const lines = content.split("\n").filter(l => l.trim());
-        for (const line of lines) {
-            res.write(`data: ${JSON.stringify(line)}\n\n`);
-        }
-    }, 2000);
+    const client: FeedClient = { res, tailState };
+    if (!logFeedClients[type]) logFeedClients[type] = new Set();
+    logFeedClients[type].add(client);
+    startLogFeed(type);
 
     req.on("close", () => {
-        clearInterval(interval);
+        logFeedClients[type]?.delete(client);
+        stopLogFeedIfIdle(type);
     });
 });
 
