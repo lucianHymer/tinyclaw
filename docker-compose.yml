@@ -44,6 +44,7 @@ services:
       - BROKER_SECRET=${BROKER_SECRET}
       - PUBLIC_HOST=${PUBLIC_HOST}
       - DEV_NETWORK=tinyclaw_dev
+      - DOCKER_PROXY_URL=http://docker-proxy:2375/v1.47
     networks:
       - internal
     deploy:
@@ -54,18 +55,15 @@ services:
 
   docker-proxy:
     image: wollomatic/socket-proxy:1
+    group_add:
+      - "${DOCKER_GID}"
     command:
       - "-listenip=0.0.0.0"
       - "-allowfrom=0.0.0.0/0"
-      - "-allowGET=/v1\\..{1,2}/containers/json"
-      - "-allowGET=/v1\\..{1,2}/containers/.+/json"
-      - "-allowGET=/v1\\..{1,2}/containers/.+/stats"
-      - "-allowPOST=/v1\\..{1,2}/containers/.+/update"
-      - "-allowGET=/v1\\..{1,2}/_ping"
-      - "-allowPOST=/v1\\..{1,2}/containers/create"
-      - "-allowPOST=/v1\\..{1,2}/containers/.+/start"
-      - "-allowPOST=/v1\\..{1,2}/containers/.+/stop"
-      - "-allowDELETE=/v1\\..{1,2}/containers/.+"
+      - "-allowhealthcheck"
+      - "-allowGET=/v1\\..{1,2}/(containers/json.*|containers/[a-f0-9]+/(json|stats.*)|_ping)"
+      - "-allowPOST=/v1\\..{1,2}/containers/([a-f0-9]+/(update|start|stop)|create.*)"
+      - "-allowDELETE=/v1\\..{1,2}/containers/[a-f0-9]+.*"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -76,8 +74,8 @@ services:
           memory: 64M
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2375/v1.47/_ping"]
-      interval: 30s
+      test: ["CMD", "/healthcheck"]
+      interval: 10s
       timeout: 5s
       retries: 3
 
@@ -87,14 +85,16 @@ services:
       dockerfile: Dockerfile.dashboard
     restart: always
     depends_on:
-      - bot
-      - docker-proxy
+      bot:
+        condition: service_started
+      docker-proxy:
+        condition: service_healthy
     volumes:
       - ./.tinyclaw:/app/.tinyclaw:ro
     ports:
       - "127.0.0.1:3100:3100"
     environment:
-      - DOCKER_PROXY_URL=http://docker-proxy:2375
+      - DOCKER_PROXY_URL=http://docker-proxy:2375/v1.47
     networks:
       - internal
     healthcheck:
