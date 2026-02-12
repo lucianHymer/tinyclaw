@@ -35,7 +35,7 @@ const TINYCLAW_DIR = path.join(PROJECT_DIR, ".tinyclaw");
 const QUEUE_INCOMING = path.join(TINYCLAW_DIR, "queue/incoming");
 const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://docker-proxy:2375";
-const DASHBOARD_HOST = process.env.DASHBOARD_HOST || "localhost";
+const PUBLIC_HOST = process.env.PUBLIC_HOST || "localhost";
 const DEV_NETWORK = process.env.DEV_NETWORK || "tinyclaw_dev";
 
 function textContent(text: string) {
@@ -359,7 +359,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
                 const result = await createDevContainerFn(
                     { name: containerName, email: parsedEmail, sshPublicKey: parsedKey },
-                    { port, networkName: DEV_NETWORK, dashboardHost: DASHBOARD_HOST, dockerBaseUrl: DOCKER_PROXY_URL },
+                    { port, networkName: DEV_NETWORK, publicHost: PUBLIC_HOST, dockerBaseUrl: DOCKER_PROXY_URL },
                 );
 
                 // Two-phase error handling: distinguish create-failed from start-failed

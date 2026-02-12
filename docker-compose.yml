@@ -42,7 +42,7 @@ services:
       - DEFAULT_CWD=${WORKSPACE_ROOT}
       - CREDENTIAL_BROKER_URL=http://broker:3000
       - BROKER_SECRET=${BROKER_SECRET}
-      - DASHBOARD_HOST=${DASHBOARD_HOST}
+      - PUBLIC_HOST=${PUBLIC_HOST}
       - DEV_NETWORK=tinyclaw_dev
     networks:
       - internal

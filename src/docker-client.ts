@@ -406,7 +406,7 @@ export interface DevContainerUserInput {
 export interface DevContainerInfraConfig {
     port: number;
     networkName: string;
-    dashboardHost: string;
+    publicHost: string;
     dockerBaseUrl: string;
 }
 
@@ -448,7 +448,7 @@ export async function createDevContainer(
                 "/secrets/broker-env.sh:/etc/profile.d/broker-env.sh:ro",
             ],
             PortBindings: {
-                "22/tcp": [{ HostIp: "127.0.0.1", HostPort: String(config.port) }],
+                "22/tcp": [{ HostIp: "0.0.0.0", HostPort: String(config.port) }],
             },
             RestartPolicy: { Name: "unless-stopped", MaximumRetryCount: 0 },
             LogConfig: {
@@ -472,7 +472,7 @@ export async function createDevContainer(
         containerId: result.Id,
         name: input.name,
         port: config.port,
-        host: config.dashboardHost,
+        host: config.publicHost,
     };
 }
 
