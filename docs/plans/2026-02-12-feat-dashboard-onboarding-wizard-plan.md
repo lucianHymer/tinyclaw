@@ -23,7 +23,7 @@ Self-service, slide-by-slide wizard at `/onboarding` that provisions dev contain
 2. **MCP tool uses raw JSON Schema** — must use SDK `tool()` function with Zod schemas, matching all existing tools.
 3. **No Zod validation on POST body** — project convention requires `safeParse()` at I/O boundaries.
 4. **Missing secrets volume bind** — `create-dev-container.sh` mounts `/secrets/github-installations.json`, plan omits this. Without it, git/gh breaks in new containers.
-5. **BROKER_SECRET security boundary change undocumented** — dashboard transitions from read-only to holding production secret.
+5. **BROKER_SECRET eliminated from dashboard** — use bind-mounted secrets file instead of passing secret through dashboard env vars. Dashboard never sees the secret.
 
 ### Key Improvements
 
@@ -48,7 +48,7 @@ The dashboard currently has no container creation UI — provisioning is CLI-onl
 
 **Solution: env-var provisioning.** Pass SSH key, name, and email as environment variables at container creation time. The container's entrypoint script reads them and configures everything. This requires only `create` + `start` proxy rules — **no exec endpoint**, which was flagged as a security risk.
 
-**Security boundary change:** Adding `BROKER_SECRET` to the dashboard container means the dashboard transitions from a read-mostly observer to a component holding a production secret. This is necessary for container provisioning but must be documented. The secret only flows into container env vars and is never exposed via any API response. Defense: Cloudflare Access gates all dashboard access, and the dashboard binds to `127.0.0.1` (only reachable via tunnel).
+**Security boundary preserved:** The dashboard does NOT need `BROKER_SECRET`. Instead, broker credentials are delivered to dev containers via a bind-mounted secrets file (`/secrets/broker-env.sh`). The dashboard only specifies the mount path in the container creation spec — it never reads or holds the secret value. This keeps the dashboard as a read-mostly observer with no production secrets.
 
 ### Research Insights: Architecture Validation
 
@@ -76,7 +76,7 @@ Dashboard                    Docker Proxy              Docker Daemon
    |                              |          Container CMD runs:
    |                              |          1. Read PROVISION_SSH_KEY → authorized_keys
    |                              |          2. Read PROVISION_NAME/EMAIL → git config
-   |                              |          3. Write broker env → /etc/profile.d/
+   |                              |          3. /secrets/broker-env.sh already mounted at /etc/profile.d/
    |                              |          4. ssh-keygen -A
    |                              |          5. exec sshd
 ```
@@ -87,7 +87,7 @@ Dashboard                    Docker Proxy              Docker Daemon
 -allowPOST=/v1\\..{1,2}/containers/.+/start
 ```
 
-**Security of env vars:** SSH public keys are not sensitive. Name and email are not sensitive. BROKER_SECRET is already passed as env var in the existing flow.
+**Security of env vars:** SSH public keys are not sensitive. Name and email are not sensitive. Broker credentials are delivered via bind-mounted file, not env vars — the dashboard never touches them.
 
 ## Technical Approach
 
@@ -101,12 +101,10 @@ Extract the inline CMD from `Dockerfile.dev-container` into a proper entrypoint 
 #!/bin/bash
 set -euo pipefail
 
-# Credential broker env vars for SSH sessions
-# Use printf with %s (not variable interpolation) to prevent injection.
-# Write to profile.d so SSH login sessions inherit these.
-printf 'export CREDENTIAL_BROKER_URL=%s\nexport BROKER_SECRET=%s\n' \
-  "${CREDENTIAL_BROKER_URL:-}" "${BROKER_SECRET:-}" \
-  > /etc/profile.d/broker-env.sh
+# Credential broker env vars: delivered via bind mount at /etc/profile.d/broker-env.sh
+# The host's /secrets/broker-env.sh is mounted read-only into the container.
+# SSH login sessions source /etc/profile.d/* automatically.
+# No need to write broker credentials here — they arrive via the mount.
 
 # Provisioning: SSH key (from dashboard wizard or manual injection)
 if [ -n "${PROVISION_SSH_KEY:-}" ]; then
@@ -180,29 +178,29 @@ docker-proxy:
     - "-allowPOST=/v1\\..{1,2}/containers/.+/start"
 ```
 
-Add env vars to dashboard service:
+Add env vars to dashboard service (no secrets — broker credentials delivered via bind mount):
 
 ```yaml
 dashboard:
   environment:
     - DOCKER_PROXY_URL=http://docker-proxy:2375
     - DEV_NETWORK_NAME=tinyclaw_dev
-    - BROKER_SECRET=${BROKER_SECRET}
     - DASHBOARD_HOST=<server-hostname>
+```
+
+Create `/secrets/broker-env.sh` on the host (one-time setup):
+
+```bash
+# /secrets/broker-env.sh — mounted into dev containers at /etc/profile.d/broker-env.sh
+export CREDENTIAL_BROKER_URL=http://broker:3000
+export BROKER_SECRET=<actual-secret>
 ```
 
 ### Research Insights: Proxy Scope
 
 The proxy rules allow creating/starting ANY container, not just dev containers. The application layer constrains this (only creates `dev-*` containers with `tinyclaw.type=dev-container` label). This matches the existing pattern — `allowPOST` for memory update also allows updating any container. Defense-in-depth is at the application layer.
 
-**Fail-fast validation at startup:** Dashboard should check `BROKER_SECRET` and `DEV_NETWORK_NAME` are set at startup. If missing, log a warning. In the creation handler, return 503 if not configured:
-
-```typescript
-if (!BROKER_SECRET) {
-  res.status(503).json({ error: "Container creation not configured (missing BROKER_SECRET)" });
-  return;
-}
-```
+**Fail-fast validation at startup:** Dashboard should check `DEV_NETWORK_NAME` and `DASHBOARD_HOST` are set at startup. If missing, log a warning. In the creation handler, return 503 if not configured.
 
 #### 1d. Docker client additions — `src/docker-client.ts`
 
@@ -225,9 +223,9 @@ interface DevContainerUserInput {
 interface DevContainerInfraConfig {
   port: number;
   networkName: string;
-  brokerSecret: string;
   dashboardHost: string;
   dockerBaseUrl: string;
+  // No brokerSecret — delivered via bind-mounted /secrets/broker-env.sh
 }
 
 interface CreateContainerResult {
@@ -314,8 +312,7 @@ const containerSpec = {
     `PROVISION_SSH_KEY=${sshPublicKey}`,
     `PROVISION_NAME=${name}`,
     `PROVISION_EMAIL=${email}`,
-    `CREDENTIAL_BROKER_URL=http://broker:3000`,
-    `BROKER_SECRET=${brokerSecret}`,
+    // No broker credentials here — delivered via bind mount below
   ],
   ExposedPorts: { "22/tcp": {} },
   Labels: {
@@ -334,6 +331,7 @@ const containerSpec = {
     SecurityOpt: ["no-new-privileges"],      // prevent setuid escalation (OWASP)
     Binds: [
       "/secrets/github-installations.json:/secrets/github-installations.json:ro",
+      "/secrets/broker-env.sh:/etc/profile.d/broker-env.sh:ro",
     ],
     PortBindings: {
       "22/tcp": [{ HostIp: "0.0.0.0", HostPort: String(port) }],
@@ -819,7 +817,7 @@ Target: ~400x300px, optimized for web. Generate with `/gemini-imagegen` skill.
 - [ ] Docker API failures show error with retry option
 - [ ] Private key paste is rejected with warning
 - [ ] Image not found shows admin-actionable error message
-- [ ] Missing BROKER_SECRET returns 503 at creation endpoint
+- [ ] Missing DEV_NETWORK_NAME returns 503 at creation endpoint
 - [ ] Concurrent creation returns 429
 
 ### Security
@@ -873,7 +871,7 @@ Target: ~400x300px, optimized for web. Generate with `/gemini-imagegen` skill.
 ## Dependencies & Prerequisites
 
 - `tinyclaw-dev` Docker image must be pre-built on host
-- `BROKER_SECRET` env var must be set for dashboard container
+- `/secrets/broker-env.sh` must exist on host (contains CREDENTIAL_BROKER_URL + BROKER_SECRET exports)
 - Dashboard hostname must be configured (`DASHBOARD_HOST` env var)
 - Dev network must exist (created by `docker compose up`)
 - `DEV_NETWORK_NAME` env var must match actual Docker network name (validate at startup)
