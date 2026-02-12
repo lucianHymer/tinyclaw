@@ -394,12 +394,15 @@ async function pollOutgoingQueue(): Promise<void> {
                             `No pending message found for messageId ${data.messageId}, sending to chat directly`,
                         );
 
-                        // Fallback: send to the configured chat
+                        // Fallback: send to the configured chat, routing to the correct thread
                         const chatId = settings.telegram_chat_id;
                         const chunks = splitMessage(data.message);
+                        const threadOpt = data.threadId && data.threadId !== 1
+                            ? { message_thread_id: data.threadId }
+                            : {};
 
                         for (const chunk of chunks) {
-                            const sent = await bot.api.sendMessage(chatId, chunk);
+                            const sent = await bot.api.sendMessage(chatId, chunk, threadOpt);
                             if (data.model) {
                                 storeMessageModel(sent.message_id, data.model);
                                 await reactWithModel(chatId, sent.message_id, data.model);
