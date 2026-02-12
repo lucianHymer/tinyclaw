@@ -95,6 +95,7 @@ services:
       - "127.0.0.1:3100:3100"
     environment:
       - DOCKER_PROXY_URL=http://docker-proxy:2375/v1.47
+      - COMPOSE_PROJECT=${COMPOSE_PROJECT_NAME:-tinyclaw}
     networks:
       - internal
     healthcheck:
