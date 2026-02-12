@@ -11,7 +11,7 @@ import {
     type DockerContainerInspect,
     fetchDockerJson,
     fetchDockerStats,
-    getDevContainers,
+    getAllContainers,
     isValidContainerId,
     validateAndUpdateMemory,
     OS_RESERVE_BYTES,
@@ -25,6 +25,10 @@ const STATIC_DIR = path.join(SCRIPT_DIR, "static");
 const SESSIONS_DIR = path.join(TINYCLAW_DIR, "sessions");
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://localhost:2375";
+const COMPOSE_PROJECT = process.env.COMPOSE_PROJECT || "";
+if (!COMPOSE_PROJECT) {
+    console.warn("COMPOSE_PROJECT not set — infra containers will not be shown");
+}
 
 // ─── JSONL Readers ───
 
@@ -438,9 +442,12 @@ function startContainerFeed(): void {
         if (containerFeedPolling) return;
         containerFeedPolling = true;
         try {
-            const containers = await getDevContainers(DOCKER_PROXY_URL);
+            const containers = await getAllContainers(DOCKER_PROXY_URL, COMPOSE_PROJECT);
             const host = parseMeminfo();
-            const allocatedTotal = containers.reduce((sum, c) => sum + c.memory.limit, 0);
+            const allocatedTotal = containers
+                .filter(c => !c.memory.unlimited)
+                .reduce((sum, c) => sum + c.memory.limit, 0);
+            const unlimitedCount = containers.filter(c => c.memory.unlimited).length;
             const data = JSON.stringify({
                 containers,
                 host: {
@@ -448,6 +455,7 @@ function startContainerFeed(): void {
                     availableMemory: host.availableBytes,
                     allocatedTotal,
                     osReserve: OS_RESERVE_BYTES,
+                    unlimitedCount,
                 },
             });
             for (const client of containerFeedClients) {
@@ -475,9 +483,12 @@ function stopContainerFeedIfIdle(): void {
 // GET /api/containers — list all dev containers with memory stats
 app.get("/api/containers", async (_req, res) => {
     try {
-        const containers = await getDevContainers(DOCKER_PROXY_URL);
+        const containers = await getAllContainers(DOCKER_PROXY_URL, COMPOSE_PROJECT);
         const host = parseMeminfo();
-        const allocatedTotal = containers.reduce((sum, c) => sum + c.memory.limit, 0);
+        const allocatedTotal = containers
+            .filter(c => !c.memory.unlimited)
+            .reduce((sum, c) => sum + c.memory.limit, 0);
+        const unlimitedCount = containers.filter(c => c.memory.unlimited).length;
         res.json({
             containers,
             host: {
@@ -485,6 +496,7 @@ app.get("/api/containers", async (_req, res) => {
                 availableMemory: host.availableBytes,
                 allocatedTotal,
                 osReserve: OS_RESERVE_BYTES,
+                unlimitedCount,
             },
         });
     } catch (err) {
@@ -550,6 +562,7 @@ app.post("/api/containers/:id/memory", async (req, res) => {
             containerId,
             newLimitBytes,
             hostMem.totalBytes,
+            COMPOSE_PROJECT,
         );
 
         res.json(result);
@@ -681,6 +694,10 @@ app.get("/api/session-logs", (req, res) => {
 // GET /api/logs/:type — SSE stream of log files (telegram | queue) (broadcast pattern)
 app.get("/api/logs/:type", (req, res) => {
     const type = req.params.type;
+    if (type !== "telegram" && type !== "queue") {
+        res.status(400).json({ error: "Invalid log type. Use 'telegram' or 'queue'." });
+        return;
+    }
     const logFile = getLogFilePath(type);
 
     res.writeHead(200, {

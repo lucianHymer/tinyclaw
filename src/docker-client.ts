@@ -8,9 +8,16 @@ import { ValidationError, type SSHPublicKey, type DevName, type DevEmail } from 
 
 // ─── Constants ───
 
-export const MIN_MEMORY_BYTES = 256 * 1024 * 1024; // 256MB minimum per container
-export const OS_RESERVE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB reserved for OS
+/**
+ * Reserved for Linux kernel, systemd, and base system services.
+ * On a headless Proxmox VM, kernel + system services use ~200-500MB.
+ * Previously 2GB when infra containers were untracked.
+ */
+export const OS_RESERVE_BYTES = 512 * 1024 * 1024;
+export const MIN_MEMORY_BYTES = 64 * 1024 * 1024; // 64MB floor (docker-proxy's current limit)
 export const MEMORY_SNAP_BYTES = 64 * 1024 * 1024; // 64MB snap increment
+
+export type ContainerCategory = "infra" | "dev";
 
 // ─── Docker API Types ───
 
@@ -46,11 +53,12 @@ export interface ContainerInfo {
     id: string;
     name: string;
     status: string;
-    memory: { usage: number; limit: number; usagePercent: number };
+    memory: { usage: number; limit: number; usagePercent: number; unlimited: boolean };
     cpus: number;
     uptime: string;
     idle: boolean;
     sshPort?: number;
+    category: ContainerCategory;
 }
 
 // ─── Result type for memory validation ───
@@ -123,16 +131,65 @@ export async function fetchDockerStats(baseUrl: string, containerId: string): Pr
 
 // ─── Container Listing ───
 
-export async function getDevContainers(baseUrl: string): Promise<ContainerInfo[]> {
-    // List all containers, then filter by label
-    const containers = await fetchDockerJson<DockerContainer[]>(
-        baseUrl,
-        '/containers/json?all=true&filters={"label":["tinyclaw.type=dev-container"]}',
-    );
+/**
+ * Merge two Docker container lists by ID, deduplicating.
+ */
+function mergeContainers(a: DockerContainer[], b: DockerContainer[]): DockerContainer[] {
+    const seen = new Set<string>();
+    const result: DockerContainer[] = [];
+    for (const c of [...a, ...b]) {
+        if (!seen.has(c.Id)) {
+            seen.add(c.Id);
+            result.push(c);
+        }
+    }
+    return result;
+}
 
-    // Parallelize inspect + stats calls across all containers
+/**
+ * Fetch all relevant containers: infra (compose project) + dev containers.
+ * Two parallel filtered Docker API queries, merged and deduplicated.
+ * Internal helper — both getAllContainers() and getContainerMemoryLimits() delegate here.
+ */
+async function fetchRelevantContainers(
+    baseUrl: string,
+    composeProject: string,
+): Promise<DockerContainer[]> {
+    const [composeResult, devResult] = await Promise.allSettled([
+        composeProject
+            ? fetchDockerJson<DockerContainer[]>(
+                baseUrl,
+                `/containers/json?all=true&filters=${encodeURIComponent(
+                    JSON.stringify({ label: [`com.docker.compose.project=${composeProject}`] }),
+                )}`,
+            )
+            : Promise.resolve([] as DockerContainer[]),
+        fetchDockerJson<DockerContainer[]>(
+            baseUrl,
+            `/containers/json?all=true&filters=${encodeURIComponent(
+                JSON.stringify({ label: ["tinyclaw.type=dev-container"] }),
+            )}`,
+        ),
+    ]);
+    return mergeContainers(
+        composeResult.status === "fulfilled" ? composeResult.value : [],
+        devResult.status === "fulfilled" ? devResult.value : [],
+    );
+}
+
+/**
+ * Get all relevant containers: infra (compose project) + dev containers.
+ * Two parallel filtered Docker API queries (push filtering to Docker API).
+ */
+export async function getAllContainers(
+    baseUrl: string,
+    composeProject: string,
+): Promise<ContainerInfo[]> {
+    const relevant = await fetchRelevantContainers(baseUrl, composeProject);
+
+    // Parallel inspect + stats (two-level Promise.allSettled)
     const settled = await Promise.allSettled(
-        containers.map(async (c) => {
+        relevant.map(async (c) => {
             const name = (c.Names[0] || "").replace(/^\//, "");
             let usage = 0;
             let limit = 0;
@@ -140,6 +197,7 @@ export async function getDevContainers(baseUrl: string): Promise<ContainerInfo[]
             let uptime = "";
             let idle = true;
             let sshPort: number | undefined;
+            let isUnlimited = false;
 
             const [inspectResult, statsResult] = await Promise.allSettled([
                 fetchDockerJson<DockerContainerInspect>(baseUrl, `/containers/${c.Id}/json`),
@@ -150,7 +208,10 @@ export async function getDevContainers(baseUrl: string): Promise<ContainerInfo[]
 
             if (inspectResult.status === "fulfilled") {
                 const inspect = inspectResult.value;
-                limit = inspect.HostConfig.Memory || 0;
+                // Determine "unlimited" from inspect, NOT stats
+                // Docker stats returns host total RAM for unlimited containers on cgroups v2
+                isUnlimited = inspect.HostConfig.Memory === 0;
+                limit = isUnlimited ? 0 : inspect.HostConfig.Memory;
                 cpus = inspect.HostConfig.NanoCpus ? inspect.HostConfig.NanoCpus / 1e9 : 0;
                 uptime = inspect.State.StartedAt ? formatUptime(inspect.State.StartedAt) : "";
                 const portBindings = inspect.HostConfig?.PortBindings?.["22/tcp"];
@@ -162,10 +223,14 @@ export async function getDevContainers(baseUrl: string): Promise<ContainerInfo[]
             if (statsResult.status === "fulfilled" && statsResult.value) {
                 const stats = statsResult.value;
                 usage = stats.memory_stats?.usage || 0;
-                if (stats.memory_stats?.limit) limit = stats.memory_stats.limit;
+                // Only use stats limit for non-unlimited containers (stats returns host total for unlimited)
+                if (!isUnlimited && stats.memory_stats?.limit) limit = stats.memory_stats.limit;
                 // Consider container idle if only 1-2 processes (init + sshd)
                 idle = (stats.pids_stats?.current || 0) <= 2;
             }
+
+            const category: ContainerCategory =
+                c.Labels["tinyclaw.type"] === "dev-container" ? "dev" : "infra";
 
             return {
                 id: c.Id,
@@ -175,11 +240,13 @@ export async function getDevContainers(baseUrl: string): Promise<ContainerInfo[]
                     usage,
                     limit,
                     usagePercent: limit > 0 ? Math.round((usage / limit) * 1000) / 10 : 0,
+                    unlimited: isUnlimited,
                 },
                 cpus: Math.round(cpus * 10) / 10,
                 uptime,
                 idle,
                 sshPort,
+                category,
             } satisfies ContainerInfo;
         }),
     );
@@ -192,26 +259,38 @@ export async function getDevContainers(baseUrl: string): Promise<ContainerInfo[]
         }
     }
 
-    // Sort by memory usage descending
-    results.sort((a, b) => b.memory.usage - a.memory.usage);
+    // Sort: infra by memory usage desc, then dev by memory usage desc
+    results.sort((a, b) => {
+        if (a.category !== b.category) return a.category === "infra" ? -1 : 1;
+        return b.memory.usage - a.memory.usage;
+    });
     return results;
+}
+
+/**
+ * Get dev containers only. Delegates to getAllContainers to prevent code duplication.
+ */
+export async function getDevContainers(baseUrl: string): Promise<ContainerInfo[]> {
+    const composeProject = process.env.COMPOSE_PROJECT || "";
+    const all = await getAllContainers(baseUrl, composeProject);
+    return all.filter(c => c.category === "dev");
 }
 
 // ─── Lightweight Container Memory Query ───
 
 /**
- * Get memory limits for all dev containers using only list + parallel inspect.
- * No stats calls — much faster than getDevContainers() for allocation validation.
- * Returns array of { id, memoryLimit } for each container.
+ * Get memory limits for all relevant containers (infra + dev) using only list + parallel inspect.
+ * No stats calls — much faster than getAllContainers() for allocation validation.
+ * Excludes unlimited containers (Memory === 0) from results.
  */
-async function getContainerMemoryLimits(baseUrl: string): Promise<Array<{ id: string; memoryLimit: number }>> {
-    const containers = await fetchDockerJson<DockerContainer[]>(
-        baseUrl,
-        '/containers/json?all=true&filters={"label":["tinyclaw.type=dev-container"]}',
-    );
+async function getContainerMemoryLimits(
+    baseUrl: string,
+    composeProject: string,
+): Promise<Array<{ id: string; memoryLimit: number }>> {
+    const relevant = await fetchRelevantContainers(baseUrl, composeProject);
 
     const settled = await Promise.allSettled(
-        containers.map(async (c) => {
+        relevant.map(async (c) => {
             const inspect = await fetchDockerJson<DockerContainerInspect>(
                 baseUrl,
                 `/containers/${c.Id}/json`,
@@ -226,7 +305,8 @@ async function getContainerMemoryLimits(baseUrl: string): Promise<Array<{ id: st
             results.push(result.value);
         }
     }
-    return results;
+    // Exclude unlimited containers from budget
+    return results.filter(c => c.memoryLimit > 0);
 }
 
 // ─── Memory Validation & Update ───
@@ -234,23 +314,23 @@ async function getContainerMemoryLimits(baseUrl: string): Promise<Array<{ id: st
 /**
  * Validate and update a container's memory limit with full safety checks:
  * - Snap to 64MB increments
- * - Enforce minimum memory limit (256MB)
- * - Validate total allocation against host capacity
+ * - Enforce minimum memory limit (64MB)
+ * - Self-modification guards for dashboard and docker-proxy
+ * - Directional validation: allow decreases when over-budget, block increases
  * - Warn if new limit is below or close to current usage (OOM risk)
- *
- * @param baseUrl - Docker API base URL
- * @param containerId - Docker container ID
- * @param newLimitBytes - Desired new memory limit in bytes
- * @param hostTotalBytes - Total host memory in bytes (for allocation validation)
- * @returns MemoryUpdateResult with old/new limits and optional warning
- * @throws Error if validation fails or Docker API call fails
  */
 export async function validateAndUpdateMemory(
     baseUrl: string,
     containerId: string,
     newLimitBytes: number,
     hostTotalBytes: number,
+    composeProject: string,
 ): Promise<MemoryUpdateResult> {
+    // Container ID validation (defense-in-depth)
+    if (!isValidContainerId(containerId)) {
+        throw new ValidationError("Invalid container ID format");
+    }
+
     // Minimum memory check
     if (newLimitBytes < MIN_MEMORY_BYTES) {
         throw new ValidationError(`Limit too low. Minimum is ${formatBytes(MIN_MEMORY_BYTES)}`);
@@ -267,6 +347,12 @@ export async function validateAndUpdateMemory(
     const containerName = (inspect.Name || "").replace(/^\//, "");
     const oldLimit = inspect.HostConfig.Memory || 0;
 
+    // Server-side self-modification guards
+    const serviceName = inspect.Config?.Labels?.["com.docker.compose.service"] || "";
+    if (serviceName === "docker-proxy" && snappedLimit < 64 * 1024 * 1024) {
+        throw new ValidationError(`Docker-proxy minimum is 64MB. Use 'docker update' from CLI for lower values.`);
+    }
+
     // Read current memory usage for OOM warning
     let currentUsage = 0;
     if (inspect.State.Status === "running") {
@@ -278,18 +364,36 @@ export async function validateAndUpdateMemory(
         }
     }
 
-    // Validate total allocation across all dev containers (lightweight: no stats calls)
-    const allLimits = await getContainerMemoryLimits(baseUrl);
+    // Dashboard guard: must be above MAX(current usage * 1.5, 128MB)
+    if (serviceName === "dashboard" && snappedLimit < Math.max(currentUsage * 1.5, 128 * 1024 * 1024)) {
+        throw new ValidationError(
+            `Dashboard minimum is MAX(current usage x 1.5, 128MB). ` +
+            `Current usage: ${formatBytes(currentUsage)}. Use 'docker update' from CLI for lower values.`,
+        );
+    }
+
+    // Directional validation: allow decreases when over-budget, block increases
+    const allLimits = await getContainerMemoryLimits(baseUrl, composeProject);
     const otherContainersTotal = allLimits
         .filter(c => c.id !== containerId)
         .reduce((sum, c) => sum + c.memoryLimit, 0);
     const maxAllocatable = hostTotalBytes - OS_RESERVE_BYTES;
     const newTotal = otherContainersTotal + snappedLimit;
+    const isIncrease = snappedLimit > oldLimit;
 
-    if (newTotal > maxAllocatable) {
+    if (isIncrease && newTotal > maxAllocatable) {
         throw new ValidationError(
-            `Total allocation would be ${formatBytes(newTotal)}, exceeding max ${formatBytes(maxAllocatable)} (host ${formatBytes(hostTotalBytes)} - ${formatBytes(OS_RESERVE_BYTES)} OS reserve)`,
+            `Cannot increase: total allocation would be ${formatBytes(newTotal)}, ` +
+            `exceeding max ${formatBytes(maxAllocatable)} ` +
+            `(host ${formatBytes(hostTotalBytes)} - ${formatBytes(OS_RESERVE_BYTES)} OS reserve)`,
         );
+    }
+
+    // Log warning if applying while over-budget
+    if (newTotal > maxAllocatable) {
+        console.warn(`Memory update applied while over-budget: ${containerName} ` +
+            `${formatBytes(oldLimit)} → ${formatBytes(snappedLimit)}, ` +
+            `total ${formatBytes(newTotal)} / max ${formatBytes(maxAllocatable)}`);
     }
 
     // OOM warning checks
@@ -300,7 +404,7 @@ export async function validateAndUpdateMemory(
         warning = `New limit (${formatBytes(snappedLimit)}) is close to current usage (${formatBytes(currentUsage)}). The container may be OOM-killed under load.`;
     }
 
-    // Apply the update: set both Memory and MemorySwap to match
+    // Apply the update: set both Memory and MemorySwap to match (no swap)
     await fetchDockerJson(
         baseUrl,
         `/containers/${containerId}/update`,

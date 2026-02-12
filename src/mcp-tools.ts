@@ -9,10 +9,8 @@ import path from "path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import {
-    type DockerContainer,
-    fetchDockerJson,
     formatBytes,
-    getDevContainers,
+    getAllContainers,
     OS_RESERVE_BYTES,
     validateAndUpdateMemory,
     listDevContainers,
@@ -37,6 +35,7 @@ const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://docker-proxy:2375";
 const PUBLIC_HOST = process.env.PUBLIC_HOST || "localhost";
 const DEV_NETWORK = process.env.DEV_NETWORK || "tinyclaw_dev";
+const COMPOSE_PROJECT = String(process.env["COMPOSE_PROJECT"] ?? "");
 
 function textContent(text: string) {
     return { type: "text" as const, text };
@@ -170,30 +169,39 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
     const getContainerStats = tool(
         "get_container_stats",
-        "Get memory usage stats for all running dev containers (tinyclaw.type=dev-container). Returns container names, memory usage, limits, CPU count, uptime, and idle status.",
+        "Get memory usage stats for all containers (infra + dev) with category tags. Returns container names, memory usage, limits, CPU count, uptime, and idle status.",
         {},
         async () => {
             try {
-                const containers = await getDevContainers(DOCKER_PROXY_URL);
+                const containers = await getAllContainers(DOCKER_PROXY_URL, COMPOSE_PROJECT);
 
                 if (containers.length === 0) {
                     return {
-                        content: [textContent("No dev containers found (label: tinyclaw.type=dev-container)")],
+                        content: [textContent("No containers found")],
                     };
                 }
 
                 const lines = containers.map(c => {
                     const parts: string[] = [c.name + ":"];
                     parts.push(c.status);
+                    parts.push("| " + c.category);
                     if (c.sshPort) parts.push(`| port ${c.sshPort}`);
                     if (c.status === "running") {
-                        const usageMB = (c.memory.usage / (1024 * 1024)).toFixed(0);
-                        const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
-                        const pct = c.memory.limit > 0 ? ((c.memory.usage / c.memory.limit) * 100).toFixed(1) : "?";
-                        parts.push(`| ${usageMB}MB / ${limitMB}MB (${pct}%)`);
+                        if (c.memory.unlimited) {
+                            parts.push("| no limit");
+                        } else {
+                            const usageMB = (c.memory.usage / (1024 * 1024)).toFixed(0);
+                            const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
+                            const pct = c.memory.limit > 0 ? ((c.memory.usage / c.memory.limit) * 100).toFixed(1) : "?";
+                            parts.push(`| ${usageMB}MB / ${limitMB}MB (${pct}%)`);
+                        }
                     } else {
-                        const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
-                        parts.push(`| ${limitMB}MB allocated`);
+                        if (c.memory.unlimited) {
+                            parts.push("| no limit");
+                        } else {
+                            const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
+                            parts.push(`| ${limitMB}MB allocated`);
+                        }
                     }
                     parts.push(`| ${c.cpus.toFixed(1)} CPUs`);
                     if (c.status === "running") {
@@ -216,22 +224,17 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
     const updateContainerMemory = tool(
         "update_container_memory",
-        "Update memory limit for a dev container. Limit in bytes. Snaps to 64MB increments, validates total allocation against host capacity, and warns about OOM risks. Only works for containers with tinyclaw.type=dev-container label.",
+        "Update memory limit for a container. Limit in bytes. Snaps to 64MB increments, validates total allocation against host capacity, and warns about OOM risks.",
         { containerName: z.string(), memoryLimitBytes: z.number() },
         async ({ containerName, memoryLimitBytes }) => {
             try {
-                // Find container by name among dev containers
-                const containers = await fetchDockerJson<DockerContainer[]>(
-                    DOCKER_PROXY_URL,
-                    `/containers/json?all=true&filters=${encodeURIComponent(JSON.stringify({ label: ["tinyclaw.type=dev-container"], name: [containerName] }))}`,
-                );
-                const match = containers.find(c =>
-                    (c.Names[0] || "").replace(/^\//, "") === containerName,
-                );
+                // Search all containers (infra + dev)
+                const containers = await getAllContainers(DOCKER_PROXY_URL, COMPOSE_PROJECT);
+                const match = containers.find(c => c.name === containerName);
 
                 if (!match) {
                     return {
-                        content: [textContent(`Container "${containerName}" not found among dev containers`)],
+                        content: [textContent(`Container "${containerName}" not found`)],
                         isError: true,
                     };
                 }
@@ -240,9 +243,10 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 const hostTotal = parseMeminfo().totalBytes;
                 const result = await validateAndUpdateMemory(
                     DOCKER_PROXY_URL,
-                    match.Id,
+                    match.id,
                     memoryLimitBytes,
                     hostTotal,
+                    COMPOSE_PROJECT,
                 );
 
                 const parts = [`Updated ${result.name} memory limit: ${formatBytes(result.oldLimit)} -> ${formatBytes(result.newLimit)}`];
@@ -267,14 +271,25 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         {},
         async () => {
             try {
-                const { totalBytes, availableBytes } = parseMeminfo();
+                const { totalBytes } = parseMeminfo();
                 const maxAllocatable = totalBytes - OS_RESERVE_BYTES;
 
+                // Get all containers for breakdown
+                const containers = await getAllContainers(DOCKER_PROXY_URL, COMPOSE_PROJECT);
+                let infraAlloc = 0, devAlloc = 0;
+                let infraCount = 0, devCount = 0, unlimitedCount = 0;
+                for (const c of containers) {
+                    if (c.memory.unlimited) { unlimitedCount++; continue; }
+                    if (c.category === "infra") { infraAlloc += c.memory.limit; infraCount++; }
+                    else { devAlloc += c.memory.limit; devCount++; }
+                }
+
                 const lines = [
-                    `Total Memory:     ${formatBytes(totalBytes)} (${totalBytes} bytes)`,
-                    `Available Memory: ${formatBytes(availableBytes)} (${availableBytes} bytes)`,
-                    `OS Reserve:       ${formatBytes(OS_RESERVE_BYTES)} (${OS_RESERVE_BYTES} bytes)`,
-                    `Max Allocatable:  ${formatBytes(maxAllocatable)} (${maxAllocatable} bytes)`,
+                    `Total Memory:       ${formatBytes(totalBytes)}`,
+                    `OS Reserve:         ${formatBytes(OS_RESERVE_BYTES)}`,
+                    `Infra Allocated:    ${formatBytes(infraAlloc)} (${infraCount} container${infraCount !== 1 ? "s" : ""}${unlimitedCount > 0 ? `, ${unlimitedCount} unlimited` : ""})`,
+                    `Dev Allocated:      ${formatBytes(devAlloc)} (${devCount} container${devCount !== 1 ? "s" : ""})`,
+                    `Available Budget:   ${formatBytes(Math.max(0, maxAllocatable - infraAlloc - devAlloc))}`,
                 ];
 
                 return { content: [textContent(lines.join("\n"))] };
@@ -456,11 +471,11 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous tool schemas require type erasure
     const tools: Array<ReturnType<typeof tool<any>>> = [
         sendMessage, listThreads, queryKnowledgeBase,
-        getContainerStats, getSystemStatus,
+        getContainerStats, getSystemStatus, getHostMemory,
     ];
     if (sourceThreadId === 1) {
         tools.push(
-            updateContainerMemory, getHostMemory,
+            updateContainerMemory,
             createDevContainerTool, stopDevContainerTool, startDevContainerTool, deleteDevContainerTool,
         );
     }

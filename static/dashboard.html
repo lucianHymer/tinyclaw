@@ -649,6 +649,39 @@ tr.clickable { cursor: pointer; }
   color: var(--accent-yellow);
 }
 
+.memory-section-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 16px 0 8px;
+  padding-left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.memory-section-header[data-category="infra"] { border-left: 3px solid var(--accent-purple); }
+.memory-section-header[data-category="dev"] { border-left: 3px solid var(--accent-blue); }
+
+.memory-section-subtotal {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.mem-card.infra { border-color: rgba(188, 140, 255, 0.2); }
+.mem-card.infra .mem-card-header .name { font-size: 13px; color: var(--text-secondary); }
+
+.mem-card.unlimited {
+  border-style: dashed;
+  border-color: rgba(210, 153, 34, 0.3);
+}
+
 #memory-footer {
   display: flex;
   align-items: center;
@@ -812,7 +845,23 @@ tr.clickable { cursor: pointer; }
   <div id="view-memory" class="view">
     <h2>Memory Rebalancing</h2>
     <div class="memory-host-bar" id="memory-host-bar"></div>
-    <div id="memory-cards"></div>
+
+    <div id="memory-cards-wrapper">
+      <div class="memory-section">
+        <h3 class="memory-section-header" data-category="infra">
+          Infrastructure <span id="infra-subtotal" class="memory-section-subtotal"></span>
+        </h3>
+        <div id="infra-cards"></div>
+      </div>
+
+      <div class="memory-section">
+        <h3 class="memory-section-header" data-category="dev">
+          Dev Containers <span id="dev-subtotal" class="memory-section-subtotal"></span>
+        </h3>
+        <div id="dev-cards"></div>
+      </div>
+    </div>
+
     <div id="memory-footer">
       <button id="memory-apply-btn" disabled>Apply Changes</button>
       <div id="memory-validation-msg">No changes pending</div>
@@ -1055,6 +1104,10 @@ tr.clickable { cursor: pointer; }
         break;
       case 'memory':
         closeSSE('memory');
+        if (state._memoryPointerUpHandler) {
+          document.removeEventListener('pointerup', state._memoryPointerUpHandler);
+          state._memoryPointerUpHandler = null;
+        }
         break;
     }
   }
@@ -1722,6 +1775,11 @@ tr.clickable { cursor: pointer; }
 
 
   function initMemory() {
+    // Remove previous global handler if one exists (prevents leak on double-init)
+    if (state._memoryPointerUpHandler) {
+      document.removeEventListener('pointerup', state._memoryPointerUpHandler);
+      state._memoryPointerUpHandler = null;
+    }
     memoryContainerStates = {};
     memoryPendingChanges = {};
     memoryServerData = {};
@@ -1739,16 +1797,16 @@ tr.clickable { cursor: pointer; }
       } catch(e) {}
     });
 
-    // Event delegation on the cards container for slider interactions
-    var cardsEl = document.getElementById('memory-cards');
-    cardsEl.onpointerdown = function(e) {
+    // Event delegation on the wrapper for slider interactions (covers both sections)
+    var wrapperEl = document.getElementById('memory-cards-wrapper');
+    wrapperEl.onpointerdown = function(e) {
       var slider = e.target.closest('input[type="range"]');
       if (!slider) return;
       var cid = slider.dataset.containerId;
       if (cid) memoryContainerStates[cid] = 'adjusting';
     };
 
-    cardsEl.oninput = function(e) {
+    wrapperEl.oninput = function(e) {
       var slider = e.target.closest('input[type="range"]');
       if (!slider) return;
       var cid = slider.dataset.containerId;
@@ -1756,7 +1814,7 @@ tr.clickable { cursor: pointer; }
 
       var newVal = parseInt(slider.value, 10);
       var labelEl = slider.parentNode.querySelector('.slider-label');
-      if (labelEl) labelEl.textContent = formatBytesJS(newVal);
+      if (labelEl) labelEl.textContent = newVal === 0 ? 'No Limit' : formatBytesJS(newVal);
 
       var row = slider.parentNode;
       var serverLimit = memoryServerData[cid] ? memoryServerData[cid].memory.limit : 0;
@@ -1771,23 +1829,23 @@ tr.clickable { cursor: pointer; }
       updateMemoryFooter();
     };
 
-    cardsEl.onpointerup = function(e) {
+    wrapperEl.onpointerup = function(e) {
       var slider = e.target.closest('input[type="range"]');
       if (!slider) return;
       var cid = slider.dataset.containerId;
       if (cid) memoryContainerStates[cid] = 'idle';
     };
 
-    // Global pointerup resets all 'adjusting' states — works even when
-    // pointer capture on the range input prevents ancestor events from firing.
-    document.addEventListener('pointerup', function() {
+    // Global pointerup resets all 'adjusting' states — store reference for cleanup
+    state._memoryPointerUpHandler = function() {
       var ids = Object.keys(memoryContainerStates);
       for (var i = 0; i < ids.length; i++) {
         if (memoryContainerStates[ids[i]] === 'adjusting') {
           memoryContainerStates[ids[i]] = 'idle';
         }
       }
-    });
+    };
+    document.addEventListener('pointerup', state._memoryPointerUpHandler);
 
     // Apply button
     document.getElementById('memory-apply-btn').onclick = applyMemoryChanges;
@@ -1798,7 +1856,8 @@ tr.clickable { cursor: pointer; }
     if (!data) {
       document.getElementById('memory-host-bar').innerHTML =
         '<div class="memory-host-stat"><div class="label">Status</div><div class="value" style="color:var(--accent-red)">Docker API unavailable</div></div>';
-      document.getElementById('memory-cards').innerHTML =
+      document.getElementById('infra-cards').innerHTML = '';
+      document.getElementById('dev-cards').innerHTML =
         '<div class="empty-state">Cannot connect to Docker proxy. Make sure docker-proxy is running.</div>';
       return;
     }
@@ -1810,11 +1869,19 @@ tr.clickable { cursor: pointer; }
     var containers = data.containers || [];
     memoryHostData = data.host || null;
 
-    // Update server data cache
+    // Update server data cache and prune stale entries
+    var currentIds = {};
     for (var i = 0; i < containers.length; i++) {
       var c = containers[i];
+      currentIds[c.id] = true;
       memoryServerData[c.id] = c;
     }
+    Object.keys(memoryServerData).forEach(function(id) {
+      if (!currentIds[id]) {
+        delete memoryServerData[id];
+        delete memoryContainerStates[id];
+      }
+    });
 
     // Render host bar
     renderMemoryHostBar(data.host);
@@ -1830,42 +1897,114 @@ tr.clickable { cursor: pointer; }
     var total = host.totalMemory || 0;
     var allocated = host.allocatedTotal || 0;
     var available = total - allocated - (host.osReserve || 0);
-    var allocPct = total > 0 ? (allocated / total * 100) : 0;
+    var unlimitedCount = host.unlimitedCount || 0;
+
+    // Compute per-category subtotals from server data
+    var infraAlloc = 0, devAlloc = 0;
+    var ids = Object.keys(memoryServerData);
+    for (var i = 0; i < ids.length; i++) {
+      var c = memoryServerData[ids[i]];
+      if (c.memory.unlimited) continue;
+      if (c.category === 'infra') infraAlloc += c.memory.limit;
+      else devAlloc += c.memory.limit;
+    }
 
     var availColor = 'var(--accent-green)';
     if (available < 4 * 1024 * 1024 * 1024) availColor = 'var(--accent-yellow)';
     if (available < 1 * 1024 * 1024 * 1024) availColor = 'var(--accent-red)';
+    if (available < 0) availColor = 'var(--accent-red)';
 
-    el.innerHTML =
+    var html =
       '<div class="memory-host-stat">' +
         '<div class="label">Host Total</div>' +
         '<div class="value">' + formatBytesJS(total) + '</div>' +
       '</div>' +
       '<div class="memory-host-stat">' +
-        '<div class="label">Allocated</div>' +
-        '<div class="value" style="color:' + barColor(allocPct) + '">' + formatBytesJS(allocated) + '</div>' +
+        '<div class="label">Infra Allocated</div>' +
+        '<div class="value" style="color:var(--accent-purple)">' + formatBytesJS(infraAlloc) + '</div>' +
+      '</div>' +
+      '<div class="memory-host-stat">' +
+        '<div class="label">Dev Allocated</div>' +
+        '<div class="value" style="color:var(--accent-blue)">' + formatBytesJS(devAlloc) + '</div>' +
       '</div>' +
       '<div class="memory-host-stat">' +
         '<div class="label">OS Reserve</div>' +
         '<div class="value" style="color:var(--text-secondary)">' + formatBytesJS(host.osReserve || 0) + '</div>' +
       '</div>' +
       '<div class="memory-host-stat">' +
-        '<div class="label">Available for Containers</div>' +
-        '<div class="value" style="color:' + availColor + '">' + formatBytesJS(Math.max(0, available)) + '</div>' +
+        '<div class="label">Available</div>' +
+        '<div class="value" style="color:' + availColor + '">' + formatBytesJS(Math.max(0, available)) + (available < 0 ? ' (OVER BUDGET)' : '') + '</div>' +
       '</div>';
+
+    if (unlimitedCount > 0) {
+      html +=
+        '<div class="memory-host-stat">' +
+          '<div class="label" style="color:var(--accent-yellow)">' + unlimitedCount + ' container' + (unlimitedCount > 1 ? 's' : '') + ' with no memory limit</div>' +
+        '</div>';
+    }
+
+    el.innerHTML = html;
   }
 
   function renderMemoryCards(containers) {
-    var cardsEl = document.getElementById('memory-cards');
+    var infraEl = document.getElementById('infra-cards');
+    var devEl = document.getElementById('dev-cards');
 
-    if (containers.length === 0) {
-      cardsEl.innerHTML = '<div class="empty-state">No dev containers found. Containers must have the label tinyclaw.type=dev-container.</div>';
-      return;
+    // Split by category
+    var infraContainers = [];
+    var devContainers = [];
+    for (var i = 0; i < containers.length; i++) {
+      if (containers[i].category === 'infra') infraContainers.push(containers[i]);
+      else devContainers.push(containers[i]);
     }
 
+    // Update section subtotals
+    var infraTotal = 0, devTotal = 0;
+    for (var a = 0; a < infraContainers.length; a++) {
+      if (!infraContainers[a].memory.unlimited) infraTotal += infraContainers[a].memory.limit;
+    }
+    for (var b = 0; b < devContainers.length; b++) {
+      if (!devContainers[b].memory.unlimited) devTotal += devContainers[b].memory.limit;
+    }
+    document.getElementById('infra-subtotal').textContent = formatBytesJS(infraTotal) + ' (' + infraContainers.length + ')';
+    document.getElementById('dev-subtotal').textContent = formatBytesJS(devTotal) + ' (' + devContainers.length + ')';
+
+    renderCardsInSection(infraContainers, infraEl);
+    renderCardsInSection(devContainers, devEl);
+
+    // Remove cards from each section that no longer belong
+    pruneCards(infraEl, infraContainers);
+    pruneCards(devEl, devContainers);
+  }
+
+  function pruneCards(sectionEl, containers) {
+    var existingCards = sectionEl.querySelectorAll('.mem-card');
+    for (var j = 0; j < existingCards.length; j++) {
+      var cardId = existingCards[j].id.replace('mem-card-', '');
+      var found = false;
+      for (var k = 0; k < containers.length; k++) {
+        if (containers[k].id === cardId) { found = true; break; }
+      }
+      if (!found) existingCards[j].remove();
+    }
+  }
+
+  function renderCardsInSection(containers, sectionEl) {
     // Determine max possible limit for slider (host total - OS reserve)
     var maxLimit = memoryHostData ? (memoryHostData.totalMemory - (memoryHostData.osReserve || 0)) : 16 * 1024 * 1024 * 1024;
     var SNAP = 64 * 1024 * 1024; // 64MB
+    var MIN = 64 * 1024 * 1024; // 64MB
+
+    if (containers.length === 0) {
+      if (!sectionEl.querySelector('.empty-state')) {
+        sectionEl.innerHTML = '<div class="empty-state">No containers in this section.</div>';
+      }
+      return;
+    }
+
+    // Remove empty state if it exists
+    var emptyState = sectionEl.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
 
     for (var i = 0; i < containers.length; i++) {
       var c = containers[i];
@@ -1875,11 +2014,26 @@ tr.clickable { cursor: pointer; }
       if (cState === 'adjusting' || cState === 'applying') continue;
 
       var existing = document.getElementById('mem-card-' + c.id);
+      var isUnlimited = c.memory.unlimited;
+      var isInfra = c.category === 'infra';
       var usagePct = c.memory.limit > 0 ? (c.memory.usage / c.memory.limit * 100) : 0;
-      var usageColor = barColor(usagePct);
+      var usageColor = isUnlimited ? 'var(--text-secondary)' : barColor(usagePct);
 
       var statusCls = c.status === 'running' ? 'badge-green' : 'badge-red';
       var idleBadge = c.idle ? ' <span class="badge badge-yellow">idle</span>' : '';
+      var unlimitedBadge = isUnlimited ? ' <span class="badge" style="background:rgba(210,153,34,0.15);color:var(--accent-yellow)">No Limit</span>' : '';
+
+      // Display name: infra containers show service label with svc/ prefix
+      var displayName = c.name;
+      if (isInfra) {
+        // Extract compose service name from container name (format: project-service-N)
+        var parts = c.name.split('-');
+        if (parts.length >= 2) {
+          displayName = 'svc/' + parts.slice(1, -1).join('-');
+          // Fallback if that strips everything
+          if (displayName === 'svc/') displayName = 'svc/' + c.name;
+        }
+      }
 
       // Current slider value: pending change or server limit
       var sliderVal = memoryPendingChanges[c.id] !== undefined ? memoryPendingChanges[c.id] : c.memory.limit;
@@ -1887,9 +2041,10 @@ tr.clickable { cursor: pointer; }
 
       var cardHtml =
         '<div class="mem-card-header">' +
-          '<span class="name">' + escapeHtml(c.name) + '</span>' +
+          '<span class="name">' + escapeHtml(displayName) + '</span>' +
           '<span class="badge ' + statusCls + '">' + escapeHtml(c.status) + '</span>' +
           idleBadge +
+          unlimitedBadge +
           '<span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">' +
             (c.cpus ? c.cpus + ' CPU' + (c.cpus !== 1 ? 's' : '') : '') +
             (c.uptime ? ' | ' + escapeHtml(c.uptime) : '') +
@@ -1897,43 +2052,34 @@ tr.clickable { cursor: pointer; }
         '</div>' +
         '<div class="mem-card-stats">' +
           '<span>Usage: <strong style="color:' + usageColor + '">' + formatBytesJS(c.memory.usage) + '</strong></span>' +
-          '<span>Limit: <strong>' + formatBytesJS(c.memory.limit) + '</strong></span>' +
-          '<span>' + c.memory.usagePercent.toFixed(1) + '%</span>' +
+          '<span>Limit: <strong>' + (isUnlimited ? 'None' : formatBytesJS(c.memory.limit)) + '</strong></span>' +
+          (isUnlimited ? '' : '<span>' + c.memory.usagePercent.toFixed(1) + '%</span>') +
         '</div>' +
         '<div class="mem-card-bar">' +
-          '<div class="mem-card-bar-usage" style="width:' + Math.min(usagePct, 100) + '%;background:' + usageColor + '"></div>' +
-          '<span class="mem-card-bar-limit">' + formatBytesJS(c.memory.usage) + ' / ' + formatBytesJS(c.memory.limit) + '</span>' +
+          '<div class="mem-card-bar-usage" style="width:' + (isUnlimited ? '0' : Math.min(usagePct, 100)) + '%;background:' + usageColor + '"></div>' +
+          '<span class="mem-card-bar-limit">' + formatBytesJS(c.memory.usage) + (isUnlimited ? '' : ' / ' + formatBytesJS(c.memory.limit)) + '</span>' +
         '</div>' +
         '<div class="mem-card-slider-row' + (isChanged ? ' changed' : '') + '">' +
-          '<span style="font-size:11px;color:var(--text-secondary);min-width:40px">256MB</span>' +
+          '<span style="font-size:11px;color:var(--text-secondary);min-width:40px">' + (isUnlimited ? '0' : formatBytesJS(MIN)) + '</span>' +
           '<input type="range" data-container-id="' + c.id + '" ' +
-            'min="' + (256 * 1024 * 1024) + '" ' +
+            'min="0" ' +
             'max="' + maxLimit + '" ' +
             'step="' + SNAP + '" ' +
             'value="' + sliderVal + '">' +
-          '<span class="slider-label">' + formatBytesJS(sliderVal) + '</span>' +
+          '<span class="slider-label">' + (sliderVal === 0 ? 'No Limit' : formatBytesJS(sliderVal)) + '</span>' +
         '</div>';
 
       if (existing) {
         existing.innerHTML = cardHtml;
+        // Update class list
+        existing.className = 'mem-card' + (isInfra ? ' infra' : '') + (isUnlimited ? ' unlimited' : '');
       } else {
         var div = document.createElement('div');
-        div.className = 'mem-card';
+        div.className = 'mem-card' + (isInfra ? ' infra' : '') + (isUnlimited ? ' unlimited' : '');
         div.id = 'mem-card-' + c.id;
         div.innerHTML = cardHtml;
-        cardsEl.appendChild(div);
+        sectionEl.appendChild(div);
       }
-    }
-
-    // Remove cards for containers that no longer exist
-    var existingCards = cardsEl.querySelectorAll('.mem-card');
-    for (var j = 0; j < existingCards.length; j++) {
-      var cardId = existingCards[j].id.replace('mem-card-', '');
-      var found = false;
-      for (var k = 0; k < containers.length; k++) {
-        if (containers[k].id === cardId) { found = true; break; }
-      }
-      if (!found) existingCards[j].remove();
     }
   }
 
@@ -1951,36 +2097,65 @@ tr.clickable { cursor: pointer; }
       return;
     }
 
-    // Calculate total allocation with pending changes
+    // Calculate total allocation with pending changes (exclude unlimited)
     var totalAlloc = 0;
+    var hasIncrease = false;
     var ids = Object.keys(memoryServerData);
     for (var i = 0; i < ids.length; i++) {
       var cid = ids[i];
+      var serverC = memoryServerData[cid];
+      if (serverC.memory.unlimited && memoryPendingChanges[cid] === undefined) continue;
+      var effectiveLimit;
       if (memoryPendingChanges[cid] !== undefined) {
-        totalAlloc += memoryPendingChanges[cid];
+        effectiveLimit = memoryPendingChanges[cid];
+        if (effectiveLimit > serverC.memory.limit) hasIncrease = true;
       } else {
-        totalAlloc += memoryServerData[cid].memory.limit;
+        effectiveLimit = serverC.memory.limit;
       }
+      if (effectiveLimit > 0) totalAlloc += effectiveLimit;
     }
 
     var maxAlloc = memoryHostData ? (memoryHostData.totalMemory - (memoryHostData.osReserve || 0)) : Infinity;
+    var overBudget = totalAlloc > maxAlloc;
 
-    if (totalAlloc > maxAlloc) {
+    // Check for sensitive containers (dashboard/docker-proxy)
+    var sensitiveNames = [];
+    var changedIds = Object.keys(memoryPendingChanges);
+    for (var s = 0; s < changedIds.length; s++) {
+      var sc = memoryServerData[changedIds[s]];
+      if (sc) {
+        var n = sc.name.toLowerCase();
+        if (n.indexOf('dashboard') !== -1 || n.indexOf('docker-proxy') !== -1) {
+          sensitiveNames.push(sc.name);
+        }
+      }
+    }
+
+    if (overBudget && hasIncrease) {
+      // Over budget with increases — block
       btn.disabled = true;
       msg.className = 'error';
       msg.id = 'memory-validation-msg';
-      msg.textContent = 'Total allocation (' + formatBytesJS(totalAlloc) + ') exceeds max (' + formatBytesJS(maxAlloc) + ')';
+      msg.textContent = 'Cannot increase while over budget. Total: ' + formatBytesJS(totalAlloc) + ' / Max: ' + formatBytesJS(maxAlloc);
       return;
     }
 
-    // Check for lowering below current usage
+    if (overBudget) {
+      // Over budget but all decreases — allow
+      btn.disabled = false;
+      msg.className = 'warn';
+      msg.id = 'memory-validation-msg';
+      msg.textContent = 'Over budget by ' + formatBytesJS(totalAlloc - maxAlloc) + '. Decreases allowed.';
+      return;
+    }
+
+    // Under budget — check for OOM warnings
     var warnings = [];
-    var changedIds = Object.keys(memoryPendingChanges);
     for (var j = 0; j < changedIds.length; j++) {
       var cid2 = changedIds[j];
-      var serverC = memoryServerData[cid2];
-      if (serverC && memoryPendingChanges[cid2] < serverC.memory.usage) {
-        warnings.push(serverC.name + ' limit below current usage (OOM risk)');
+      var serverC2 = memoryServerData[cid2];
+      if (serverC2 && memoryPendingChanges[cid2] > 0 && memoryPendingChanges[cid2] < serverC2.memory.usage) {
+        warnings.push(serverC2.name + ' limit below current usage (OOM risk)');
       }
     }
 
@@ -2003,36 +2178,80 @@ tr.clickable { cursor: pointer; }
     var changedIds = Object.keys(memoryPendingChanges);
     if (changedIds.length === 0) return;
 
+    // Snapshot pending changes and container names at the start so SSE
+    // events that arrive during confirm() or sequential fetches cannot
+    // mutate the data we operate on.
+    var snapshot = {};
+    for (var i = 0; i < changedIds.length; i++) {
+      var cid = changedIds[i];
+      if (memoryPendingChanges[cid] !== undefined) {
+        snapshot[cid] = {
+          newLimit: memoryPendingChanges[cid],
+          name: memoryServerData[cid] ? memoryServerData[cid].name : cid
+        };
+      }
+    }
+
+    // Client-side confirmation for sensitive containers
+    var sensitiveNames = [];
+    var snapshotIds = Object.keys(snapshot);
+    for (var s = 0; s < snapshotIds.length; s++) {
+      var sName = snapshot[snapshotIds[s]].name.toLowerCase();
+      if (sName.indexOf('dashboard') !== -1 || sName.indexOf('docker-proxy') !== -1) {
+        sensitiveNames.push(snapshot[snapshotIds[s]].name);
+      }
+    }
+    if (sensitiveNames.length > 0) {
+      var ok = confirm(
+        'WARNING: You are adjusting memory for: ' + sensitiveNames.join(', ') + '\n\n' +
+        'These containers are required for dashboard operation. ' +
+        'Reducing memory too aggressively may cause the dashboard to become unreachable.\n\n' +
+        'If the dashboard becomes unresponsive, use "docker update --memory=<bytes> <container>" from the host CLI to recover.\n\n' +
+        'Continue?'
+      );
+      if (!ok) return;
+    }
+
+    // Re-validate snapshot after confirm() returns (SSE events may have
+    // fired while the dialog was open).
+    var validIds = [];
+    for (var v = 0; v < snapshotIds.length; v++) {
+      var entry = snapshot[snapshotIds[v]];
+      if (entry && entry.newLimit !== undefined) {
+        validIds.push(snapshotIds[v]);
+      }
+    }
+    if (validIds.length === 0) return;
+
     // Disable button, mark containers as applying
     btn.disabled = true;
     btn.textContent = 'Applying...';
-    for (var i = 0; i < changedIds.length; i++) {
-      memoryContainerStates[changedIds[i]] = 'applying';
+    for (var m = 0; m < validIds.length; m++) {
+      memoryContainerStates[validIds[m]] = 'applying';
     }
 
     var results = [];
     var errors = [];
 
     try {
-      // Send updates sequentially to get proper validation
-      for (var j = 0; j < changedIds.length; j++) {
-        var cid = changedIds[j];
-        var newLimit = memoryPendingChanges[cid];
+      for (var j = 0; j < validIds.length; j++) {
+        var applyCid = validIds[j];
+        var applyEntry = snapshot[applyCid];
         try {
-          var resp = await fetch('/api/containers/' + cid + '/memory', {
+          var resp = await fetch('/api/containers/' + applyCid + '/memory', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ limit: String(newLimit) })
+            body: JSON.stringify({ limit: String(applyEntry.newLimit) })
           });
           var body = await resp.json();
           if (!resp.ok) {
-            errors.push((memoryServerData[cid] ? memoryServerData[cid].name : cid) + ': ' + (body.error || 'Failed'));
+            errors.push(applyEntry.name + ': ' + (body.error || 'Failed'));
           } else {
             results.push(body);
-            delete memoryPendingChanges[cid];
+            delete memoryPendingChanges[applyCid];
           }
         } catch(e) {
-          errors.push((memoryServerData[cid] ? memoryServerData[cid].name : cid) + ': Network error');
+          errors.push(applyEntry.name + ': Network error');
         }
       }
 
@@ -2046,14 +2265,19 @@ tr.clickable { cursor: pointer; }
         msg.textContent = results.length + ' container(s) updated successfully';
       }
     } finally {
-      // Reset state for all containers
-      for (var k = 0; k < changedIds.length; k++) {
-        memoryContainerStates[changedIds[k]] = 'idle';
+      for (var k = 0; k < validIds.length; k++) {
+        memoryContainerStates[validIds[k]] = 'idle';
+      }
+      // Clean up orphaned pending changes for containers that are truly
+      // gone (no longer in memoryServerData after apply completes).
+      var pendingIds = Object.keys(memoryPendingChanges);
+      for (var p = 0; p < pendingIds.length; p++) {
+        if (!memoryServerData[pendingIds[p]]) {
+          delete memoryPendingChanges[pendingIds[p]];
+        }
       }
       btn.textContent = 'Apply Changes';
       updateMemoryFooter();
-      // Re-render cards with fresh server data immediately instead of
-      // waiting for the next SSE tick.
       fetchMemoryContainers();
     }
   }

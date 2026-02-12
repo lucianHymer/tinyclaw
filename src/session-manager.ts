@@ -244,15 +244,15 @@ function buildMcpToolsBlock(isMaster: boolean): string {
         "- `send_message` — Send a message to another thread by targetThreadId",
         "- `list_threads` — List all active threads with IDs, names, and working directories",
         "- `query_knowledge_base` — Read context.md, decisions.md, or active-projects.md from the knowledge base",
-        "- `get_container_stats` — Get memory usage, CPU, uptime, idle status, and SSH port for all dev containers",
+        "- `get_container_stats` — Get memory usage, CPU, uptime, idle status for all containers (infra + dev) with category tags",
         "- `get_system_status` — Get CPU, RAM, disk, load averages, and message queue depths",
+        "- `get_host_memory` — Get host total/available memory, OS reserve, and max allocatable for containers",
     ];
     if (isMaster) {
         lines.push(
             "",
             "Master-only tools:",
-            "- `update_container_memory` — Change a dev container's memory limit (validates against host capacity)",
-            "- `get_host_memory` — Get host total/available memory, OS reserve, and max allocatable for containers",
+            "- `update_container_memory` — Change memory limit for any container (infra or dev). Server-enforced minimums for dashboard/docker-proxy. Validates against host capacity.",
             "- `create_dev_container` — Create a new dev container (name, email, SSH public key). Returns SSH config.",
             "- `stop_dev_container` — Stop a running dev container by name. Reversible.",
             "- `start_dev_container` — Start a stopped dev container by name.",
