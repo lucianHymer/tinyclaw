@@ -78,6 +78,20 @@ RUN chmod +x /usr/local/bin/dev-entrypoint.sh
 # For MCP-created containers, broker-env.sh is bind-mounted from /secrets/.
 # For CLI-created containers, the entrypoint writes it from env vars (fallback).
 
+# Disable default Ubuntu MOTD (legal notice, doc links, etc.)
+# Our custom welcome shows inside tmux via profile.d script instead.
+RUN rm -rf /etc/update-motd.d/* /etc/legal && : > /etc/motd
+
+# Custom welcome message (shown inside tmux on first shell)
+COPY docker/motd /etc/tinyclaw-motd
+RUN chmod +x /etc/tinyclaw-motd \
+    && echo '#!/bin/bash' > /etc/profile.d/zzz-welcome.sh \
+    && echo 'if [ -n "$TMUX" ] && [ -t 1 ] && [ ! -f /tmp/.tinyclaw-welcome ]; then' >> /etc/profile.d/zzz-welcome.sh \
+    && echo '    /etc/tinyclaw-motd' >> /etc/profile.d/zzz-welcome.sh \
+    && echo '    touch /tmp/.tinyclaw-welcome' >> /etc/profile.d/zzz-welcome.sh \
+    && echo 'fi' >> /etc/profile.d/zzz-welcome.sh \
+    && chmod +x /etc/profile.d/zzz-welcome.sh
+
 # Auto-attach tmux on SSH login (in profile.d, not .bashrc — only runs for login shells)
 RUN echo '#!/bin/bash' > /etc/profile.d/tmux-auto.sh \
     && echo 'if [ -n "$SSH_CONNECTION" ] && [ -z "$TMUX" ] && [ -t 0 ]; then' >> /etc/profile.d/tmux-auto.sh \
