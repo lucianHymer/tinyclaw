@@ -15,7 +15,7 @@ if [ -f "$SETTINGS_FILE" ]; then
 fi
 INTERVAL=${INTERVAL:-500}
 
-HEARTBEAT_PROMPT="Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK."
+HEARTBEAT_PROMPT="Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs human attention, reply with exactly [NO_UPDATES]."
 
 mkdir -p "$QUEUE_INCOMING"
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -90,7 +90,7 @@ while true; do
 
     log "Heartbeat cycle complete: $CURRENT_THREAD thread(s) queued"
 
-    # Optional: wait 30s and check for HEARTBEAT_OK responses to clean up
+    # Optional: wait 30s and check for [NO_UPDATES] responses to clean up (belt-and-suspenders — primary suppression is in queue-processor.ts)
     sleep 30
 
     for THREAD_ID in $THREAD_IDS; do
@@ -98,8 +98,8 @@ while true; do
         for RESPONSE_FILE in $RESPONSE_PATTERN; do
             if [ -f "$RESPONSE_FILE" ]; then
                 RESPONSE=$(jq -r '.message // empty' "$RESPONSE_FILE" 2>/dev/null)
-                if echo "$RESPONSE" | grep -q "HEARTBEAT_OK"; then
-                    log "Thread $THREAD_ID: HEARTBEAT_OK - cleaning up response"
+                if echo "$RESPONSE" | grep -q "\[NO_UPDATES\]"; then
+                    log "Thread $THREAD_ID: [NO_UPDATES] - cleaning up response"
                     rm -f "$RESPONSE_FILE"
                 elif [ -n "$RESPONSE" ]; then
                     log "Thread $THREAD_ID response: ${RESPONSE:0:100}..."

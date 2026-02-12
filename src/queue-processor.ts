@@ -473,7 +473,7 @@ async function processHeartbeat(msg: IncomingMessage): Promise<string> {
   const threads = loadThreads();
   const threadConfig = threads[String(msg.threadId)];
   if (!threadConfig) {
-    return "HEARTBEAT_OK";
+    return "[NO_UPDATES]";
   }
 
   const heartbeatPrompt = buildHeartbeatPrompt(threadConfig);
@@ -503,7 +503,7 @@ async function processHeartbeat(msg: IncomingMessage): Promise<string> {
   });
 
   const { text } = await collectQueryResponse(q);
-  return text.trim() || "HEARTBEAT_OK";
+  return text.trim() || "[NO_UPDATES]";
 }
 
 // ─── Route a message to the right model ───
@@ -597,6 +597,19 @@ async function processMessage(messageFile: string): Promise<void> {
     if (source === "heartbeat") {
       effectiveModel = "haiku";
       responseText = await processHeartbeat(msg);
+
+      // Suppress heartbeat responses with no actionable content
+      if (responseText.includes("[NO_UPDATES]")) {
+        log(
+          "INFO",
+          `Heartbeat suppressed for thread=${threadId} (no updates)`,
+        );
+        clearStatus(messageId);
+        if (fs.existsSync(processingFile)) {
+          fs.unlinkSync(processingFile);
+        }
+        return;
+      }
     } else {
       // ─── Route the message ───
       const recentHistory = getRecentHistory({ threadId, limit: 5 });

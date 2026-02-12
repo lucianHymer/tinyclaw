@@ -233,7 +233,7 @@ You own this file. Evolve it as you learn about this repo:
 - Keep "Notes" as scratch space for context between heartbeats
 
 You can update HEARTBEAT.md anytime — during heartbeats or during normal conversation.
-Reply HEARTBEAT_OK during heartbeats if nothing needs attention (suppresses Telegram delivery).`;
+During heartbeats, reply with \`[NO_UPDATES]\` if nothing needs human attention (suppresses Telegram delivery). Only send a message when there's something actionable.`;
 }
 
 function buildMcpToolsBlock(isMaster: boolean): string {
@@ -413,8 +413,8 @@ Active threads in the system: ${threadInventory}
 
 ## After executing
 - Update timestamps AFTER completing each tier's checks
-- Reply HEARTBEAT_OK if nothing needs attention (suppresses Telegram delivery)
-- If something needs attention, describe it clearly — it will be sent to the thread
+- If nothing needs human attention, reply with exactly \`[NO_UPDATES]\` — this suppresses Telegram delivery. Do NOT include administrative details about what you checked or the heartbeat process itself.
+- If something genuinely needs human attention (failed CI, merge conflicts, urgent flags, stale PRs, etc.), describe ONLY the actionable items concisely. Do NOT include \`[NO_UPDATES]\` in this case.
 - You can edit any section of HEARTBEAT.md freely — it's your operational playbook
 - To report to other threads, use the \`send_message\` MCP tool with the target threadId`
 
@@ -429,7 +429,7 @@ As the master thread, you do NOT send a daily summary to yourself. Instead, your
    - PRs waiting on human review for >24 hours
    - Threads reporting blockers
    - Stale branches or abandoned work
-   If there are items needing attention, include them in your response (do NOT reply HEARTBEAT_OK — let the message reach Telegram so the human sees it).
+   If there are items needing attention, include them in your response (do NOT include \`[NO_UPDATES]\` — let the message reach Telegram so the human sees it).
 3. **Thread health overview:** Note any threads that have NOT sent a daily report in the last 24 hours (they may be idle or have a broken heartbeat). Active threads: ${threadInventory}
 4. **Cross-pollinate heartbeat patterns:** Read HEARTBEAT.md from each active worker
    thread's working directory (construct path from threads.json: {thread.cwd}/HEARTBEAT.md).

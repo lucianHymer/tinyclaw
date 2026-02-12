@@ -49,7 +49,7 @@ The Master thread (General topic) has elevated visibility -- it receives history
 
 ### Heartbeat Loop
 
-Each thread gets periodic check-ins via a heartbeat cron. The agent reads `HEARTBEAT.md` (a living task list) in its repo, takes action on pending items, and reports back. Uses haiku to minimize cost. `HEARTBEAT_OK` responses are suppressed from Telegram -- you only get notified when something actually needs attention.
+Each thread gets periodic check-ins via a heartbeat cron. The agent reads `HEARTBEAT.md` (a living task list) in its repo, takes action on pending items, and reports back. Uses haiku to minimize cost. Responses containing `[NO_UPDATES]` are suppressed from Telegram -- you only get notified when something actually needs attention.
 
 ### Real-Time Dashboard
 
