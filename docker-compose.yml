@@ -42,6 +42,8 @@ services:
       - DEFAULT_CWD=${WORKSPACE_ROOT}
       - CREDENTIAL_BROKER_URL=http://broker:3000
       - BROKER_SECRET=${BROKER_SECRET}
+      - DASHBOARD_HOST=${DASHBOARD_HOST}
+      - DEV_NETWORK=tinyclaw_dev
     networks:
       - internal
     deploy:
@@ -60,6 +62,10 @@ services:
       - "-allowGET=/v1\\..{1,2}/containers/.+/stats"
       - "-allowPOST=/v1\\..{1,2}/containers/.+/update"
       - "-allowGET=/v1\\..{1,2}/_ping"
+      - "-allowPOST=/v1\\..{1,2}/containers/create"
+      - "-allowPOST=/v1\\..{1,2}/containers/.+/start"
+      - "-allowPOST=/v1\\..{1,2}/containers/.+/stop"
+      - "-allowDELETE=/v1\\..{1,2}/containers/.+"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:

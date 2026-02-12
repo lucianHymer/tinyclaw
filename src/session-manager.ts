@@ -244,16 +244,51 @@ function buildMcpToolsBlock(isMaster: boolean): string {
         "- `send_message` — Send a message to another thread by targetThreadId",
         "- `list_threads` — List all active threads with IDs, names, and working directories",
         "- `query_knowledge_base` — Read context.md, decisions.md, or active-projects.md from the knowledge base",
+        "- `get_container_stats` — Get memory usage, CPU, uptime, idle status, and SSH port for all dev containers",
+        "- `get_system_status` — Get CPU, RAM, disk, load averages, and message queue depths",
     ];
     if (isMaster) {
         lines.push(
-            "- `get_container_stats` — Get memory usage, CPU, uptime, and idle status for all dev containers",
+            "",
+            "Master-only tools:",
             "- `update_container_memory` — Change a dev container's memory limit (validates against host capacity)",
             "- `get_host_memory` — Get host total/available memory, OS reserve, and max allocatable for containers",
-            "- `get_system_status` — Get CPU, RAM, disk, load averages, and message queue depths",
+            "- `create_dev_container` — Create a new dev container (name, email, SSH public key). Returns SSH config.",
+            "- `stop_dev_container` — Stop a running dev container by name. Reversible.",
+            "- `start_dev_container` — Start a stopped dev container by name.",
+            "- `delete_dev_container` — Permanently delete a dev container by name. Cannot be undone.",
         );
     }
     return lines.join("\n");
+}
+
+function buildOnboardingBlock(): string {
+    return `## Developer Onboarding
+
+When a new developer needs a dev container, guide them through onboarding conversationally. Collect three pieces of information:
+
+1. **SSH public key** — Ask if they have one. If not, guide them:
+   - macOS/Linux: \`ssh-keygen -t ed25519 -C "email@example.com"\`
+   - Windows: same command in PowerShell or Git Bash
+   - They paste the contents of \`~/.ssh/id_ed25519.pub\` (the .pub file)
+   - If they paste a private key (contains "PRIVATE KEY" or "-----BEGIN"), warn them immediately. Do NOT echo the key back. Guide them to the .pub file.
+
+2. **Name** — Their first name or preferred handle. Used for container name (dev-alice) and git config.
+
+3. **Email** — For git config inside the container. **Must match their GitHub account email** so commits are properly attributed (green squares, profile linkage). If they're unsure, they can check at github.com/settings/emails.
+
+Rules:
+- Accept fields in any order. If someone provides multiple fields in one message, extract them all.
+- After collecting all three, display a summary and ask for confirmation before calling create_dev_container:
+  "I'll create your container with: Name: Alice, Email: alice@company.com, SSH key: ed25519. Proceed?"
+- After creation succeeds, share the SSH config block and test command: \`ssh tinyclaw-<name>\`
+- After creation, call get_container_stats to verify the container is running.
+- If creation fails, explain the error and suggest next steps.
+- Never echo private keys. Never include SSH key content in confirmation summaries beyond the type (ed25519/rsa).
+- For delete operations, always confirm: "This will permanently destroy dev-alice and all data inside. Are you sure?"
+
+Container defaults: 2GB RAM, 2 CPUs, SSH port from 2201-2299 range.
+Check capacity with get_container_stats (count) and get_host_memory (RAM).`;
 }
 
 function buildRuntimeBlock(config: ThreadConfig, runtime?: { threadId?: number; model?: string }): string {
@@ -280,6 +315,7 @@ export function buildThreadPrompt(config: ThreadConfig, runtime?: { threadId?: n
             buildGithubBlock(),
             buildMasterCrossThreadBlock(),
             buildKnowledgeBaseBlock(),
+            buildOnboardingBlock(),
             buildHeartbeatBlock(),
             buildMcpToolsBlock(true),
             `Keep responses concise — Telegram messages over 4000 characters get split.${runtimeBlock}`,

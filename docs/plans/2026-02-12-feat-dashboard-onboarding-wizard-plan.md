@@ -4,13 +4,28 @@ type: feat
 date: 2026-02-12
 brainstorm: docs/brainstorms/2026-02-12-dashboard-onboarding-wizard-brainstorm.md
 deepened: 2026-02-12
+deepened_2: 2026-02-12
 pivot: "Pivoted from dashboard wizard to agent-only. The master thread handles onboarding conversationally — a form is the wrong UX for a 3-field interaction when you already have a chat agent."
 agents_used: security-sentinel, architecture-strategist, kieran-typescript-reviewer, performance-oracle, agent-native-reviewer, pattern-recognition-specialist, code-simplicity-reviewer, best-practices-researcher, learnings-researcher
+agents_used_2: agent-native-reviewer, architecture-strategist, security-sentinel, best-practices-researcher
 ---
 
 # Agent-Driven Dev Container Lifecycle
 
 The master thread manages dev container lifecycle via MCP tools: create, stop, start, delete. A new developer messages the Telegram forum, the agent walks them through SSH key setup if needed, collects their info, and provisions their container. No dashboard UI needed — the agent is a better form.
+
+## Deepening Summary (Round 2)
+
+**Focus:** Agent conversational UX and state visibility gaps.
+**Key improvements:**
+1. Port numbers added to `get_container_stats` output — agent can reconstruct SSH configs after session compaction
+2. `buildOnboardingBlock()` added to master system prompt — guides the agent through the conversation flow
+3. Tool descriptions enriched with reversibility, input format, and confirmation requirements
+4. Two-phase error handling: "created but failed to start" vs "creation failed"
+5. GitHub identity matching: name/email must match GitHub account for commit attribution
+6. `DASHBOARD_HOST` and `DEV_NETWORK` as bot container env vars (not hardcoded, not proxy-discovered)
+
+**Deferred to Phase 2:** Container logs tool (`get_container_logs`) for debugging SSH connection failures. Requires adding `GET /containers/{id}/logs` proxy rule.
 
 ## Overview
 
@@ -137,6 +152,37 @@ export BROKER_SECRET=<actual-secret>
 No changes to dashboard service env vars. The dashboard stays read-only.
 
 ### Phase 2: Docker Client Functions — `src/docker-client.ts`
+
+#### Port visibility in ContainerInfo
+
+Add `sshPort` to the `ContainerInfo` interface and extract it from inspect results. Without this, the agent cannot answer "what port am I on?" or reconstruct SSH configs after session compaction.
+
+```typescript
+// Add to ContainerInfo interface:
+sshPort?: number;
+
+// Add to DockerContainerInspect interface:
+HostConfig: {
+  // ...existing fields...
+  PortBindings?: Record<string, Array<{ HostIp: string; HostPort: string }>>;
+};
+
+// In getDevContainers(), extract port from inspect result:
+if (inspectResult.status === "fulfilled") {
+  const inspect = inspectResult.value;
+  // ...existing limit/cpus/uptime extraction...
+  const portBindings = inspect.HostConfig?.PortBindings?.["22/tcp"];
+  if (portBindings?.[0]?.HostPort) {
+    sshPort = parseInt(portBindings[0].HostPort, 10);
+  }
+}
+```
+
+Update `get_container_stats` tool output to include port:
+```
+dev-alice: running | port 2203 | 512MB / 2048MB (25.0%) | 2.0 CPUs | 3d 2h
+dev-bob: stopped | port 2204 | 2048MB allocated | 2.0 CPUs
+```
 
 #### Branded types and validation
 
@@ -327,10 +373,10 @@ Four new tools, all master-only (`sourceThreadId === 1`):
 ```typescript
 const createDevContainer = tool(
   "create_dev_container",
-  "Create a new dev container for a developer. Provisions SSH access, git config, and credential broker. Returns SSH connection details.",
+  "Create a new dev container for a developer. Accepts name (lowercase alphanumeric, e.g. 'alice'), email, and SSH public key (paste the full key starting with ssh-ed25519 or ssh-rsa). Auto-assigns an SSH port from 2201-2299 and a unique container name (dev-alice). Returns SSH config snippet the developer can paste into ~/.ssh/config. The container gets 2GB RAM, 2 CPUs, and credential broker access. If the name is taken, a suffix is auto-incremented (dev-alice-2). IMPORTANT: Always confirm the developer's details before calling this tool.",
   {
     name: z.string().describe("Developer name (lowercase, alphanumeric + hyphens)"),
-    email: z.string().describe("Developer email (for git config)"),
+    email: z.string().describe("Developer email (for git config — must match their GitHub account for commit attribution)"),
     sshPublicKey: z.string().describe("SSH public key (ed25519, RSA, or ECDSA)"),
   },
   async ({ name, email, sshPublicKey }) => {
@@ -347,12 +393,23 @@ const createDevContainer = tool(
         { name: containerName, email: parsedEmail, sshPublicKey: parsedKey },
         { port, networkName: DEV_NETWORK, dashboardHost: DASHBOARD_HOST, dockerBaseUrl: DOCKER_PROXY_URL },
       );
+
+      // Two-phase error handling: distinguish create-failed from start-failed
+      try {
+        await startContainer(DOCKER_PROXY_URL, result.containerId);
+      } catch (startErr) {
+        return { content: [textContent(
+          `Container ${result.name} created but failed to start: ${toErrorMessage(startErr)}. ` +
+          `Use start_dev_container to retry.`
+        )], isError: true };
+      }
+
       const sshConfig = formatSSHConfig(result);
       return { content: [textContent(
-        `Container ${result.name} created on port ${result.port}.\n\nSSH config:\n\`\`\`\n${sshConfig}\n\`\`\``
+        `Container ${result.name} created and running on port ${result.port}.\n\nSSH config:\n\`\`\`\n${sshConfig}\n\`\`\``
       )] };
     } catch (err) {
-      return { content: [textContent(`Failed: ${toErrorMessage(err)}`)], isError: true };
+      return { content: [textContent(`Failed to create container: ${toErrorMessage(err)}`)], isError: true };
     }
   },
 );
@@ -363,7 +420,7 @@ const createDevContainer = tool(
 ```typescript
 const stopDevContainerTool = tool(
   "stop_dev_container",
-  "Stop a running dev container by name (e.g., 'dev-alice').",
+  "Stop a running dev container by name (e.g., 'dev-alice'). This is reversible — use start_dev_container to restart it. The container's data and port assignment are preserved. Use this for idle containers to free resources.",
   {
     name: z.string().describe("Container name (e.g., 'dev-alice')"),
   },
@@ -384,7 +441,7 @@ const stopDevContainerTool = tool(
 ```typescript
 const startDevContainerTool = tool(
   "start_dev_container",
-  "Start a stopped dev container by name.",
+  "Start a stopped dev container by name (e.g., 'dev-alice'). The container resumes with its existing data and port assignment. SSH access becomes available after a few seconds.",
   {
     name: z.string().describe("Container name (e.g., 'dev-alice')"),
   },
@@ -399,7 +456,7 @@ const startDevContainerTool = tool(
 ```typescript
 const deleteDevContainerTool = tool(
   "delete_dev_container",
-  "Permanently delete a dev container by name. Stops it first if running. This cannot be undone.",
+  "Permanently delete a dev container by name (e.g., 'dev-alice'). This is IRREVERSIBLE — all data inside the container is lost and the port is freed. Stops the container first if running. Only works on containers with the tinyclaw.type=dev-container label. IMPORTANT: Always confirm with the user before calling this tool.",
   {
     name: z.string().describe("Container name (e.g., 'dev-alice')"),
   },
@@ -429,17 +486,84 @@ if (sourceThreadId === 1) {
 
 ### Phase 4: System Prompt — `src/session-manager.ts`
 
-Update `buildMcpToolsBlock` to document the new tools:
+#### 4a. Update `buildMcpToolsBlock` to document the new tools:
 
 ```typescript
 // Master-only tools (inside isMaster block):
 "- `create_dev_container` — Create a new dev container (name, email, SSH public key). Returns SSH config.",
-"- `stop_dev_container` — Stop a running dev container by name.",
+"- `stop_dev_container` — Stop a running dev container by name. Reversible.",
 "- `start_dev_container` — Start a stopped dev container by name.",
 "- `delete_dev_container` — Permanently delete a dev container by name. Cannot be undone.",
 ```
 
 **Pre-existing bug to fix:** `get_container_stats` and `get_system_status` are available to all threads in code but documented only in the master block of `buildMcpToolsBlock`. Move their descriptions to the all-threads section.
+
+#### 4b. Add `buildOnboardingBlock()` — new function, included in master prompt only
+
+The agent has tools but no guidance on the conversation flow. Without this, it won't proactively walk someone through onboarding or know to confirm before creating.
+
+```typescript
+function buildOnboardingBlock(): string {
+  return `## Developer Onboarding
+
+When a new developer needs a dev container, guide them through onboarding conversationally. Collect three pieces of information:
+
+1. **SSH public key** — Ask if they have one. If not, guide them:
+   - macOS/Linux: \`ssh-keygen -t ed25519 -C "email@example.com"\`
+   - Windows: same command in PowerShell or Git Bash
+   - They paste the contents of \`~/.ssh/id_ed25519.pub\` (the .pub file)
+   - If they paste a private key (contains "PRIVATE KEY" or "-----BEGIN"), warn them immediately. Do NOT echo the key back. Guide them to the .pub file.
+
+2. **Name** — Their first name or preferred handle. Used for container name (dev-alice) and git config.
+
+3. **Email** — For git config inside the container. **Must match their GitHub account email** so commits are properly attributed (green squares, profile linkage). If they're unsure, they can check at github.com/settings/emails.
+
+Rules:
+- Accept fields in any order. If someone provides multiple fields in one message, extract them all.
+- After collecting all three, display a summary and ask for confirmation before calling create_dev_container:
+  "I'll create your container with: Name: Alice, Email: alice@company.com, SSH key: ed25519. Proceed?"
+- After creation succeeds, share the SSH config block and test command: \`ssh tinyclaw-<name>\`
+- After creation, call get_container_stats to verify the container is running.
+- If creation fails, explain the error and suggest next steps.
+- Never echo private keys. Never include SSH key content in confirmation summaries beyond the type (ed25519/rsa).
+- For delete operations, always confirm: "This will permanently destroy dev-alice and all data inside. Are you sure?"
+
+Container defaults: 2GB RAM, 2 CPUs, SSH port from 2201-2299 range.
+Check capacity with get_container_stats (count) and get_host_memory (RAM).`;
+}
+```
+
+Include in master prompt:
+```typescript
+if (config.isMaster) {
+  return [
+    buildPreamble(),
+    "You are the Master thread...",
+    buildGithubBlock(),
+    buildMasterCrossThreadBlock(),
+    buildKnowledgeBaseBlock(),
+    buildOnboardingBlock(),    // NEW
+    buildHeartbeatBlock(),
+    buildMcpToolsBlock(true),
+    `Keep responses concise...`,
+  ].join("\n\n");
+}
+```
+
+#### 4c. Environment variables needed for bot container
+
+Add to `docker-compose.yml` bot service environment:
+
+```yaml
+bot:
+  environment:
+    # ...existing...
+    - DASHBOARD_HOST=${DASHBOARD_HOST}  # externally reachable hostname for SSH config
+    - DEV_NETWORK=tinyclaw_dev          # Docker network for dev containers
+```
+
+`DASHBOARD_HOST` is required by `formatSSHConfig()` to produce correct SSH config snippets.
+`DEV_NETWORK` is the Docker network name — passed as env var rather than widening the proxy to allow `GET /networks`.
 
 ### Phase 5: Integration & Testing
 
@@ -469,20 +593,25 @@ Update `buildMcpToolsBlock` to document the new tools:
 - [ ] Master thread can stop/start/delete containers via corresponding tools
 - [ ] Container created with correct labels, network, memory, ports, security opts
 - [ ] SSH key installed and usable immediately after creation
-- [ ] Git config set inside container (user.name + user.email)
+- [ ] Git config set inside container (user.name + user.email matching their GitHub account)
 - [ ] SSH config snippet returned by create tool
 - [ ] Container appears in Memory dashboard view after creation
 - [ ] Duplicate names handled (auto-increment suffix)
 - [ ] Port auto-assignment from 2201-2299 range
 - [ ] Delete verifies `tinyclaw.type=dev-container` label before removing
+- [ ] `get_container_stats` includes SSH port numbers in output
+- [ ] System prompt guides agent through onboarding conversation flow
+- [ ] Agent confirms details before creating, warns about GitHub email match
 
 ### Error Handling
 - [ ] Invalid SSH key returns clear error via tool
-- [ ] Private key paste rejected with explanation
+- [ ] Private key paste rejected with explanation (agent does NOT echo key back)
 - [ ] Port range exhaustion returns clear error
 - [ ] Docker API failures return actionable error messages
 - [ ] Image not found: "tinyclaw-dev image not built. Run docker build..."
 - [ ] Delete of non-dev container refused
+- [ ] Create-succeeded-but-start-failed distinguished from create-failed (two-phase error)
+- [ ] Agent confirms before create (summary) and before delete (irreversibility warning)
 
 ### Security
 - [ ] No exec endpoint added to Docker proxy

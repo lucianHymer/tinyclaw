@@ -15,16 +15,28 @@ import {
     getDevContainers,
     OS_RESERVE_BYTES,
     validateAndUpdateMemory,
+    listDevContainers,
+    findNextAvailablePort,
+    parseDevName,
+    resolveUniqueName,
+    findContainerByName,
+    createDevContainer as createDevContainerFn,
+    startContainer,
+    stopDevContainer,
+    deleteDevContainer,
+    formatSSHConfig,
 } from "./docker-client.js";
 import { parseMeminfo, parseCpuPercent, getDiskUsage, countQueueFiles } from "./host-metrics.js";
 import { loadThreads } from "./session-manager.js";
-import { toErrorMessage } from "./types.js";
+import { toErrorMessage, parseSSHPublicKey, parseDevEmail } from "./types.js";
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(PROJECT_DIR, ".tinyclaw");
 const QUEUE_INCOMING = path.join(TINYCLAW_DIR, "queue/incoming");
 const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://docker-proxy:2375";
+const DASHBOARD_HOST = process.env.DASHBOARD_HOST || "localhost";
+const DEV_NETWORK = process.env.DEV_NETWORK || "tinyclaw_dev";
 
 function textContent(text: string) {
     return { type: "text" as const, text };
@@ -171,11 +183,24 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 }
 
                 const lines = containers.map(c => {
-                    const usageMB = (c.memory.usage / (1024 * 1024)).toFixed(0);
-                    const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
-                    const pct = c.memory.limit > 0 ? ((c.memory.usage / c.memory.limit) * 100).toFixed(1) : "?";
-                    const idle = c.idle ? " (idle)" : "";
-                    return `${c.name}: ${c.status} | ${usageMB}MB / ${limitMB}MB (${pct}%) | ${c.cpus.toFixed(1)} CPUs | ${c.uptime}${idle}`;
+                    const parts: string[] = [c.name + ":"];
+                    parts.push(c.status);
+                    if (c.sshPort) parts.push(`| port ${c.sshPort}`);
+                    if (c.status === "running") {
+                        const usageMB = (c.memory.usage / (1024 * 1024)).toFixed(0);
+                        const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
+                        const pct = c.memory.limit > 0 ? ((c.memory.usage / c.memory.limit) * 100).toFixed(1) : "?";
+                        parts.push(`| ${usageMB}MB / ${limitMB}MB (${pct}%)`);
+                    } else {
+                        const limitMB = (c.memory.limit / (1024 * 1024)).toFixed(0);
+                        parts.push(`| ${limitMB}MB allocated`);
+                    }
+                    parts.push(`| ${c.cpus.toFixed(1)} CPUs`);
+                    if (c.status === "running") {
+                        parts.push(`| ${c.uptime}`);
+                        if (c.idle) parts.push("(idle)");
+                    }
+                    return parts.join(" ");
                 });
 
                 return { content: [textContent(lines.join("\n"))] };
@@ -312,6 +337,121 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         },
     );
 
+    // ─── Container Lifecycle Tools (master-only) ───
+
+    const createDevContainerTool = tool(
+        "create_dev_container",
+        "Create a new dev container for a developer. Accepts name (lowercase alphanumeric, e.g. 'alice'), email, and SSH public key (paste the full key starting with ssh-ed25519 or ssh-rsa). Auto-assigns an SSH port from 2201-2299 and a unique container name (dev-alice). Returns SSH config snippet the developer can paste into ~/.ssh/config. The container gets 2GB RAM, 2 CPUs, and credential broker access. If the name is taken, a suffix is auto-incremented (dev-alice-2). IMPORTANT: Always confirm the developer's details before calling this tool.",
+        {
+            name: z.string().describe("Developer name (lowercase, alphanumeric + hyphens)"),
+            email: z.string().describe("Developer email (for git config — must match their GitHub account for commit attribution)"),
+            sshPublicKey: z.string().describe("SSH public key (ed25519, RSA, or ECDSA)"),
+        },
+        async ({ name, email, sshPublicKey }) => {
+            try {
+                const parsedName = parseDevName(name);
+                const parsedEmail = parseDevEmail(email);
+                const parsedKey = parseSSHPublicKey(sshPublicKey);
+
+                const containers = await listDevContainers(DOCKER_PROXY_URL);
+                const port = findNextAvailablePort(containers);
+                const containerName = resolveUniqueName(containers, parsedName);
+
+                const result = await createDevContainerFn(
+                    { name: containerName, email: parsedEmail, sshPublicKey: parsedKey },
+                    { port, networkName: DEV_NETWORK, dashboardHost: DASHBOARD_HOST, dockerBaseUrl: DOCKER_PROXY_URL },
+                );
+
+                // Two-phase error handling: distinguish create-failed from start-failed
+                try {
+                    await startContainer(DOCKER_PROXY_URL, result.containerId);
+                } catch (startErr) {
+                    return {
+                        content: [textContent(
+                            `Container ${result.name} created but failed to start: ${toErrorMessage(startErr)}. ` +
+                            `Use start_dev_container to retry.`,
+                        )],
+                        isError: true,
+                    };
+                }
+
+                const keyType = sshPublicKey.trim().split(/\s+/)[0];
+                const sshConfig = formatSSHConfig(result, keyType);
+                return {
+                    content: [textContent(
+                        `Container ${result.name} created and running on port ${result.port}.\n\nSSH config:\n\`\`\`\n${sshConfig}\n\`\`\``,
+                    )],
+                };
+            } catch (err) {
+                return {
+                    content: [textContent(`Failed to create container: ${toErrorMessage(err)}`)],
+                    isError: true,
+                };
+            }
+        },
+    );
+
+    const stopDevContainerTool = tool(
+        "stop_dev_container",
+        "Stop a running dev container by name (e.g., 'dev-alice'). This is reversible — use start_dev_container to restart it. The container's data and port assignment are preserved. Use this for idle containers to free resources.",
+        {
+            name: z.string().describe("Container name (e.g., 'dev-alice')"),
+        },
+        async ({ name }) => {
+            try {
+                const container = await findContainerByName(DOCKER_PROXY_URL, name);
+                await stopDevContainer(DOCKER_PROXY_URL, container.Id);
+                return { content: [textContent(`Stopped ${name}.`)] };
+            } catch (err) {
+                return {
+                    content: [textContent(`Failed: ${toErrorMessage(err)}`)],
+                    isError: true,
+                };
+            }
+        },
+    );
+
+    const startDevContainerTool = tool(
+        "start_dev_container",
+        "Start a stopped dev container by name (e.g., 'dev-alice'). The container resumes with its existing data and port assignment. SSH access becomes available after a few seconds.",
+        {
+            name: z.string().describe("Container name (e.g., 'dev-alice')"),
+        },
+        async ({ name }) => {
+            try {
+                const container = await findContainerByName(DOCKER_PROXY_URL, name);
+                await startContainer(DOCKER_PROXY_URL, container.Id);
+                return { content: [textContent(`Started ${name}.`)] };
+            } catch (err) {
+                return {
+                    content: [textContent(`Failed: ${toErrorMessage(err)}`)],
+                    isError: true,
+                };
+            }
+        },
+    );
+
+    const deleteDevContainerTool = tool(
+        "delete_dev_container",
+        "Permanently delete a dev container by name (e.g., 'dev-alice'). This is IRREVERSIBLE — all data inside the container is lost and the port is freed. Stops the container first if running. Only works on containers with the tinyclaw.type=dev-container label. IMPORTANT: Always confirm with the user before calling this tool.",
+        {
+            name: z.string().describe("Container name (e.g., 'dev-alice')"),
+        },
+        async ({ name }) => {
+            try {
+                const container = await findContainerByName(DOCKER_PROXY_URL, name);
+                await deleteDevContainer(DOCKER_PROXY_URL, container.Id);
+                const portInfo = container.port ? ` Port ${container.port} is now available.` : "";
+                return { content: [textContent(`Deleted ${name}.${portInfo}`)] };
+            } catch (err) {
+                return {
+                    content: [textContent(`Failed: ${toErrorMessage(err)}`)],
+                    isError: true,
+                };
+            }
+        },
+    );
+
     // Build tool list: base tools + read-only monitoring for all threads, mutating tools for master only
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous tool schemas require type erasure
     const tools: Array<ReturnType<typeof tool<any>>> = [
@@ -319,7 +459,10 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
         getContainerStats, getSystemStatus,
     ];
     if (sourceThreadId === 1) {
-        tools.push(updateContainerMemory, getHostMemory);
+        tools.push(
+            updateContainerMemory, getHostMemory,
+            createDevContainerTool, stopDevContainerTool, startDevContainerTool, deleteDevContainerTool,
+        );
     }
 
     return createSdkMcpServer({

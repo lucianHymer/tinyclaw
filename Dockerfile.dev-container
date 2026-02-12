@@ -70,9 +70,13 @@ RUN mv /usr/bin/gh /usr/bin/gh-real \
 # tmux configuration (system-wide)
 COPY docker/tmux.conf /etc/tmux.conf
 
+# Entrypoint script for provisioning + sshd
+COPY docker/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
+RUN chmod +x /usr/local/bin/dev-entrypoint.sh
+
 # CRITICAL: Docker ENV vars are NOT inherited by SSH sessions.
-# broker-env.sh is written at container start time in CMD (not build time)
-# so that runtime env vars CREDENTIAL_BROKER_URL and BROKER_SECRET are captured.
+# For MCP-created containers, broker-env.sh is bind-mounted from /secrets/.
+# For CLI-created containers, the entrypoint writes it from env vars (fallback).
 
 # Auto-attach tmux on SSH login (in profile.d, not .bashrc — only runs for login shells)
 RUN echo '#!/bin/bash' > /etc/profile.d/tmux-auto.sh \
@@ -83,4 +87,4 @@ RUN echo '#!/bin/bash' > /etc/profile.d/tmux-auto.sh \
 
 # Generate host keys on first start + start sshd
 EXPOSE 22
-CMD ["bash", "-c", "printf 'export CREDENTIAL_BROKER_URL=%s\\nexport BROKER_SECRET=%s\\n' \"$CREDENTIAL_BROKER_URL\" \"$BROKER_SECRET\" > /etc/profile.d/broker-env.sh && ssh-keygen -A && exec /usr/sbin/sshd -D -e"]
+ENTRYPOINT ["/usr/local/bin/dev-entrypoint.sh"]
