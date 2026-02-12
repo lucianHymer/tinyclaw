@@ -1,0 +1,8 @@
+Host claude-dev
+    HostName <hetzner-ip>
+    Port 220X
+    User dev
+    IdentityFile ~/.ssh/<your-key>
+    # Keeps connection alive over flaky WiFi
+    ServerAliveInterval 30
+    ServerAliveCountMax 5

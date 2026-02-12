@@ -9,6 +9,7 @@ services:
       - BROKER_SECRET=${BROKER_SECRET}
     networks:
       - internal
+      - dev
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
@@ -34,11 +35,15 @@ services:
       - ${WORKSPACE_ROOT}:${WORKSPACE_ROOT}
       - ./secrets/github-installations.json:/secrets/github-installations.json:ro
       - ${CLAUDE_CREDENTIALS}:/home/node/.claude/.credentials.json
+      # Master thread knowledge base (local-only git repo)
+      - /home/clawcian/.openclaw/knowledge-base:/home/clawcian/.openclaw/knowledge-base
     environment:
       - NODE_ENV=production
       - DEFAULT_CWD=${WORKSPACE_ROOT}
       - CREDENTIAL_BROKER_URL=http://broker:3000
       - BROKER_SECRET=${BROKER_SECRET}
+      - DASHBOARD_HOST=${DASHBOARD_HOST}
+      - DEV_NETWORK=tinyclaw_dev
     networks:
       - internal
     deploy:
@@ -47,6 +52,35 @@ services:
           memory: 2G
           cpus: '2.0'
 
+  docker-proxy:
+    image: wollomatic/socket-proxy:1
+    command:
+      - "-listenip=0.0.0.0"
+      - "-allowfrom=0.0.0.0/0"
+      - "-allowGET=/v1\\..{1,2}/containers/json"
+      - "-allowGET=/v1\\..{1,2}/containers/.+/json"
+      - "-allowGET=/v1\\..{1,2}/containers/.+/stats"
+      - "-allowPOST=/v1\\..{1,2}/containers/.+/update"
+      - "-allowGET=/v1\\..{1,2}/_ping"
+      - "-allowPOST=/v1\\..{1,2}/containers/create"
+      - "-allowPOST=/v1\\..{1,2}/containers/.+/start"
+      - "-allowPOST=/v1\\..{1,2}/containers/.+/stop"
+      - "-allowDELETE=/v1\\..{1,2}/containers/.+"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2375/v1.47/_ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   dashboard:
     build:
       context: .
@@ -54,10 +88,13 @@ services:
     restart: always
     depends_on:
       - bot
+      - docker-proxy
     volumes:
       - ./.tinyclaw:/app/.tinyclaw:ro
     ports:
       - "127.0.0.1:3100:3100"
+    environment:
+      - DOCKER_PROXY_URL=http://docker-proxy:2375
     networks:
       - internal
     healthcheck:
@@ -70,17 +107,19 @@ services:
         limits:
           memory: 256M
 
-  # cloudflared:
-  #   image: cloudflare/cloudflared:latest
-  #   restart: always
-  #   command: tunnel run
-  #   environment:
-  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
-  #   depends_on:
-  #     - dashboard
-  #   networks:
-  #     - internal
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - dashboard
+    networks:
+      - internal
 
 networks:
   internal:
+    driver: bridge
+  dev:
     driver: bridge

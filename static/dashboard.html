@@ -503,6 +503,198 @@ tr.clickable { cursor: pointer; }
   color: var(--text-primary);
 }
 
+/* ─── Memory View ─── */
+
+.memory-host-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.memory-host-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-host-stat .label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.memory-host-stat .value {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+#memory-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.mem-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.mem-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.mem-card-header .name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.mem-card-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.mem-card-bar {
+  width: 100%;
+  height: 20px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.mem-card-bar-usage {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.mem-card-bar-limit {
+  position: absolute;
+  right: 6px;
+  top: 0;
+  line-height: 20px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mem-card-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.mem-card-slider-row input[type="range"] {
+  flex: 1;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.mem-card-slider-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  cursor: pointer;
+  border: 2px solid var(--bg-primary);
+}
+
+.mem-card-slider-row input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  cursor: pointer;
+  border: 2px solid var(--bg-primary);
+}
+
+.mem-card-slider-row .slider-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  min-width: 60px;
+  text-align: right;
+}
+
+.mem-card-slider-row.changed .slider-label {
+  color: var(--accent-yellow);
+}
+
+#memory-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#memory-apply-btn {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+#memory-apply-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#memory-apply-btn:not(:disabled):hover {
+  opacity: 0.85;
+}
+
+#memory-validation-msg {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+#memory-validation-msg.warn {
+  color: var(--accent-yellow);
+}
+
+#memory-validation-msg.error {
+  color: var(--accent-red);
+}
+
 /* ─── Scrollbar ─── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-primary); }
@@ -528,6 +720,7 @@ tr.clickable { cursor: pointer; }
   <a href="#prompts" data-view="prompts">Prompts</a>
   <a href="#metrics" data-view="metrics">Metrics</a>
   <a href="#logs" data-view="logs">Logs</a>
+  <a href="#memory" data-view="memory">Memory</a>
   <div id="conn-status">
     <div id="conn-dot" class="connecting"></div>
     <span id="conn-text">connecting</span>
@@ -613,6 +806,17 @@ tr.clickable { cursor: pointer; }
       <button id="log-clear-btn">Clear</button>
     </div>
     <div class="feed-list" id="log-list"></div>
+  </div>
+
+  <!-- View: Memory -->
+  <div id="view-memory" class="view">
+    <h2>Memory Rebalancing</h2>
+    <div class="memory-host-bar" id="memory-host-bar"></div>
+    <div id="memory-cards"></div>
+    <div id="memory-footer">
+      <button id="memory-apply-btn" disabled>Apply Changes</button>
+      <div id="memory-validation-msg">No changes pending</div>
+    </div>
   </div>
 </div>
 
@@ -826,6 +1030,7 @@ tr.clickable { cursor: pointer; }
       case 'prompts': initPrompts(); break;
       case 'metrics': initMetrics(); break;
       case 'logs': initLogs(); break;
+      case 'memory': initMemory(); break;
     }
   }
 
@@ -847,6 +1052,9 @@ tr.clickable { cursor: pointer; }
         break;
       case 'logs':
         closeSSE('logs');
+        break;
+      case 'memory':
+        closeSSE('memory');
         break;
     }
   }
@@ -1499,6 +1707,362 @@ tr.clickable { cursor: pointer; }
       btn.textContent = 'Pause';
       btn.classList.remove('active');
     }
+  }
+
+  // ─── View 8: Memory Rebalancing ───
+
+  // Per-container interaction state: 'idle' | 'adjusting' | 'applying'
+  var memoryContainerStates = {};
+  // Pending slider changes: containerId -> newLimitBytes
+  var memoryPendingChanges = {};
+  // Last known server data per container
+  var memoryServerData = {};
+  // Host data from last SSE update
+  var memoryHostData = null;
+
+
+  function initMemory() {
+    memoryContainerStates = {};
+    memoryPendingChanges = {};
+    memoryServerData = {};
+    memoryHostData = null;
+
+    // Initial fetch
+    fetchMemoryContainers();
+
+    // SSE feed for live updates
+    closeSSE('memory');
+    state.eventSources.memory = createSSE('/api/containers/feed', function(evt) {
+      try {
+        var data = JSON.parse(evt.data);
+        onMemorySSEUpdate(data);
+      } catch(e) {}
+    });
+
+    // Event delegation on the cards container for slider interactions
+    var cardsEl = document.getElementById('memory-cards');
+    cardsEl.onpointerdown = function(e) {
+      var slider = e.target.closest('input[type="range"]');
+      if (!slider) return;
+      var cid = slider.dataset.containerId;
+      if (cid) memoryContainerStates[cid] = 'adjusting';
+    };
+
+    cardsEl.oninput = function(e) {
+      var slider = e.target.closest('input[type="range"]');
+      if (!slider) return;
+      var cid = slider.dataset.containerId;
+      if (!cid) return;
+
+      var newVal = parseInt(slider.value, 10);
+      var labelEl = slider.parentNode.querySelector('.slider-label');
+      if (labelEl) labelEl.textContent = formatBytesJS(newVal);
+
+      var row = slider.parentNode;
+      var serverLimit = memoryServerData[cid] ? memoryServerData[cid].memory.limit : 0;
+      if (newVal !== serverLimit) {
+        memoryPendingChanges[cid] = newVal;
+        if (row) row.classList.add('changed');
+      } else {
+        delete memoryPendingChanges[cid];
+        if (row) row.classList.remove('changed');
+      }
+
+      updateMemoryFooter();
+    };
+
+    cardsEl.onpointerup = function(e) {
+      var slider = e.target.closest('input[type="range"]');
+      if (!slider) return;
+      var cid = slider.dataset.containerId;
+      if (cid) memoryContainerStates[cid] = 'idle';
+    };
+
+    // Global pointerup resets all 'adjusting' states — works even when
+    // pointer capture on the range input prevents ancestor events from firing.
+    document.addEventListener('pointerup', function() {
+      var ids = Object.keys(memoryContainerStates);
+      for (var i = 0; i < ids.length; i++) {
+        if (memoryContainerStates[ids[i]] === 'adjusting') {
+          memoryContainerStates[ids[i]] = 'idle';
+        }
+      }
+    });
+
+    // Apply button
+    document.getElementById('memory-apply-btn').onclick = applyMemoryChanges;
+  }
+
+  async function fetchMemoryContainers() {
+    var data = await api('/api/containers');
+    if (!data) {
+      document.getElementById('memory-host-bar').innerHTML =
+        '<div class="memory-host-stat"><div class="label">Status</div><div class="value" style="color:var(--accent-red)">Docker API unavailable</div></div>';
+      document.getElementById('memory-cards').innerHTML =
+        '<div class="empty-state">Cannot connect to Docker proxy. Make sure docker-proxy is running.</div>';
+      return;
+    }
+    onMemorySSEUpdate(data);
+  }
+
+  function onMemorySSEUpdate(data) {
+    if (!data) return;
+    var containers = data.containers || [];
+    memoryHostData = data.host || null;
+
+    // Update server data cache
+    for (var i = 0; i < containers.length; i++) {
+      var c = containers[i];
+      memoryServerData[c.id] = c;
+    }
+
+    // Render host bar
+    renderMemoryHostBar(data.host);
+
+    // Render/update container cards
+    renderMemoryCards(containers);
+    updateMemoryFooter();
+  }
+
+  function renderMemoryHostBar(host) {
+    if (!host) return;
+    var el = document.getElementById('memory-host-bar');
+    var total = host.totalMemory || 0;
+    var allocated = host.allocatedTotal || 0;
+    var available = total - allocated - (host.osReserve || 0);
+    var allocPct = total > 0 ? (allocated / total * 100) : 0;
+
+    var availColor = 'var(--accent-green)';
+    if (available < 4 * 1024 * 1024 * 1024) availColor = 'var(--accent-yellow)';
+    if (available < 1 * 1024 * 1024 * 1024) availColor = 'var(--accent-red)';
+
+    el.innerHTML =
+      '<div class="memory-host-stat">' +
+        '<div class="label">Host Total</div>' +
+        '<div class="value">' + formatBytesJS(total) + '</div>' +
+      '</div>' +
+      '<div class="memory-host-stat">' +
+        '<div class="label">Allocated</div>' +
+        '<div class="value" style="color:' + barColor(allocPct) + '">' + formatBytesJS(allocated) + '</div>' +
+      '</div>' +
+      '<div class="memory-host-stat">' +
+        '<div class="label">OS Reserve</div>' +
+        '<div class="value" style="color:var(--text-secondary)">' + formatBytesJS(host.osReserve || 0) + '</div>' +
+      '</div>' +
+      '<div class="memory-host-stat">' +
+        '<div class="label">Available for Containers</div>' +
+        '<div class="value" style="color:' + availColor + '">' + formatBytesJS(Math.max(0, available)) + '</div>' +
+      '</div>';
+  }
+
+  function renderMemoryCards(containers) {
+    var cardsEl = document.getElementById('memory-cards');
+
+    if (containers.length === 0) {
+      cardsEl.innerHTML = '<div class="empty-state">No dev containers found. Containers must have the label tinyclaw.type=dev-container.</div>';
+      return;
+    }
+
+    // Determine max possible limit for slider (host total - OS reserve)
+    var maxLimit = memoryHostData ? (memoryHostData.totalMemory - (memoryHostData.osReserve || 0)) : 16 * 1024 * 1024 * 1024;
+    var SNAP = 64 * 1024 * 1024; // 64MB
+
+    for (var i = 0; i < containers.length; i++) {
+      var c = containers[i];
+      var cState = memoryContainerStates[c.id] || 'idle';
+
+      // Skip re-render if user is mid-drag or applying
+      if (cState === 'adjusting' || cState === 'applying') continue;
+
+      var existing = document.getElementById('mem-card-' + c.id);
+      var usagePct = c.memory.limit > 0 ? (c.memory.usage / c.memory.limit * 100) : 0;
+      var usageColor = barColor(usagePct);
+
+      var statusCls = c.status === 'running' ? 'badge-green' : 'badge-red';
+      var idleBadge = c.idle ? ' <span class="badge badge-yellow">idle</span>' : '';
+
+      // Current slider value: pending change or server limit
+      var sliderVal = memoryPendingChanges[c.id] !== undefined ? memoryPendingChanges[c.id] : c.memory.limit;
+      var isChanged = memoryPendingChanges[c.id] !== undefined;
+
+      var cardHtml =
+        '<div class="mem-card-header">' +
+          '<span class="name">' + escapeHtml(c.name) + '</span>' +
+          '<span class="badge ' + statusCls + '">' + escapeHtml(c.status) + '</span>' +
+          idleBadge +
+          '<span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">' +
+            (c.cpus ? c.cpus + ' CPU' + (c.cpus !== 1 ? 's' : '') : '') +
+            (c.uptime ? ' | ' + escapeHtml(c.uptime) : '') +
+          '</span>' +
+        '</div>' +
+        '<div class="mem-card-stats">' +
+          '<span>Usage: <strong style="color:' + usageColor + '">' + formatBytesJS(c.memory.usage) + '</strong></span>' +
+          '<span>Limit: <strong>' + formatBytesJS(c.memory.limit) + '</strong></span>' +
+          '<span>' + c.memory.usagePercent.toFixed(1) + '%</span>' +
+        '</div>' +
+        '<div class="mem-card-bar">' +
+          '<div class="mem-card-bar-usage" style="width:' + Math.min(usagePct, 100) + '%;background:' + usageColor + '"></div>' +
+          '<span class="mem-card-bar-limit">' + formatBytesJS(c.memory.usage) + ' / ' + formatBytesJS(c.memory.limit) + '</span>' +
+        '</div>' +
+        '<div class="mem-card-slider-row' + (isChanged ? ' changed' : '') + '">' +
+          '<span style="font-size:11px;color:var(--text-secondary);min-width:40px">256MB</span>' +
+          '<input type="range" data-container-id="' + c.id + '" ' +
+            'min="' + (256 * 1024 * 1024) + '" ' +
+            'max="' + maxLimit + '" ' +
+            'step="' + SNAP + '" ' +
+            'value="' + sliderVal + '">' +
+          '<span class="slider-label">' + formatBytesJS(sliderVal) + '</span>' +
+        '</div>';
+
+      if (existing) {
+        existing.innerHTML = cardHtml;
+      } else {
+        var div = document.createElement('div');
+        div.className = 'mem-card';
+        div.id = 'mem-card-' + c.id;
+        div.innerHTML = cardHtml;
+        cardsEl.appendChild(div);
+      }
+    }
+
+    // Remove cards for containers that no longer exist
+    var existingCards = cardsEl.querySelectorAll('.mem-card');
+    for (var j = 0; j < existingCards.length; j++) {
+      var cardId = existingCards[j].id.replace('mem-card-', '');
+      var found = false;
+      for (var k = 0; k < containers.length; k++) {
+        if (containers[k].id === cardId) { found = true; break; }
+      }
+      if (!found) existingCards[j].remove();
+    }
+  }
+
+  function updateMemoryFooter() {
+    var btn = document.getElementById('memory-apply-btn');
+    var msg = document.getElementById('memory-validation-msg');
+
+    var changedCount = Object.keys(memoryPendingChanges).length;
+
+    if (changedCount === 0) {
+      btn.disabled = true;
+      msg.className = '';
+      msg.id = 'memory-validation-msg';
+      msg.textContent = 'No changes pending';
+      return;
+    }
+
+    // Calculate total allocation with pending changes
+    var totalAlloc = 0;
+    var ids = Object.keys(memoryServerData);
+    for (var i = 0; i < ids.length; i++) {
+      var cid = ids[i];
+      if (memoryPendingChanges[cid] !== undefined) {
+        totalAlloc += memoryPendingChanges[cid];
+      } else {
+        totalAlloc += memoryServerData[cid].memory.limit;
+      }
+    }
+
+    var maxAlloc = memoryHostData ? (memoryHostData.totalMemory - (memoryHostData.osReserve || 0)) : Infinity;
+
+    if (totalAlloc > maxAlloc) {
+      btn.disabled = true;
+      msg.className = 'error';
+      msg.id = 'memory-validation-msg';
+      msg.textContent = 'Total allocation (' + formatBytesJS(totalAlloc) + ') exceeds max (' + formatBytesJS(maxAlloc) + ')';
+      return;
+    }
+
+    // Check for lowering below current usage
+    var warnings = [];
+    var changedIds = Object.keys(memoryPendingChanges);
+    for (var j = 0; j < changedIds.length; j++) {
+      var cid2 = changedIds[j];
+      var serverC = memoryServerData[cid2];
+      if (serverC && memoryPendingChanges[cid2] < serverC.memory.usage) {
+        warnings.push(serverC.name + ' limit below current usage (OOM risk)');
+      }
+    }
+
+    btn.disabled = false;
+
+    if (warnings.length > 0) {
+      msg.className = 'warn';
+      msg.id = 'memory-validation-msg';
+      msg.textContent = changedCount + ' change(s) pending. Warning: ' + warnings.join('; ');
+    } else {
+      msg.className = '';
+      msg.id = 'memory-validation-msg';
+      msg.textContent = changedCount + ' change(s) pending. Remaining: ' + formatBytesJS(maxAlloc - totalAlloc);
+    }
+  }
+
+  async function applyMemoryChanges() {
+    var btn = document.getElementById('memory-apply-btn');
+    var msg = document.getElementById('memory-validation-msg');
+    var changedIds = Object.keys(memoryPendingChanges);
+    if (changedIds.length === 0) return;
+
+    // Disable button, mark containers as applying
+    btn.disabled = true;
+    btn.textContent = 'Applying...';
+    for (var i = 0; i < changedIds.length; i++) {
+      memoryContainerStates[changedIds[i]] = 'applying';
+    }
+
+    var results = [];
+    var errors = [];
+
+    try {
+      // Send updates sequentially to get proper validation
+      for (var j = 0; j < changedIds.length; j++) {
+        var cid = changedIds[j];
+        var newLimit = memoryPendingChanges[cid];
+        try {
+          var resp = await fetch('/api/containers/' + cid + '/memory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ limit: String(newLimit) })
+          });
+          var body = await resp.json();
+          if (!resp.ok) {
+            errors.push((memoryServerData[cid] ? memoryServerData[cid].name : cid) + ': ' + (body.error || 'Failed'));
+          } else {
+            results.push(body);
+            delete memoryPendingChanges[cid];
+          }
+        } catch(e) {
+          errors.push((memoryServerData[cid] ? memoryServerData[cid].name : cid) + ': Network error');
+        }
+      }
+
+      if (errors.length > 0) {
+        msg.className = 'error';
+        msg.id = 'memory-validation-msg';
+        msg.textContent = 'Errors: ' + errors.join('; ');
+      } else {
+        msg.className = '';
+        msg.id = 'memory-validation-msg';
+        msg.textContent = results.length + ' container(s) updated successfully';
+      }
+    } finally {
+      // Reset state for all containers
+      for (var k = 0; k < changedIds.length; k++) {
+        memoryContainerStates[changedIds[k]] = 'idle';
+      }
+      btn.textContent = 'Apply Changes';
+      updateMemoryFooter();
+      // Re-render cards with fresh server data immediately instead of
+      // waiting for the next SSE tick.
+      fetchMemoryContainers();
+    }
+  }
+
+  function formatBytesJS(bytes) {
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(0) + ' MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return bytes + ' B';
   }
 
   // ─── Init ───

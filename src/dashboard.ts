@@ -7,12 +7,24 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import http from "http";
+import {
+    type DockerContainerInspect,
+    fetchDockerJson,
+    fetchDockerStats,
+    getDevContainers,
+    isValidContainerId,
+    validateAndUpdateMemory,
+    OS_RESERVE_BYTES,
+} from "./docker-client.js";
+import { parseMeminfo, parseCpuPercent, getDiskUsage, countQueueFiles, PROC_BASE } from "./host-metrics.js";
+import { toErrorMessage, isValidSessionId, ValidationError } from "./types.js";
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
 const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
 const STATIC_DIR = path.join(SCRIPT_DIR, "static");
 const SESSIONS_DIR = path.join(TINYCLAW_DIR, "sessions");
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
+const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://localhost:2375";
 
 // ─── JSONL Readers ───
 
@@ -51,51 +63,7 @@ function readRecentJsonl<T = unknown>(filePath: string, n: number): T[] {
     }
 }
 
-// ─── Host Metrics Parsers ───
-// Read from /host/proc/* (bind-mounted in Docker) or fall back to /proc/*
-
-const PROC_BASE = fs.existsSync("/host/proc") ? "/host/proc" : "/proc";
-
-function parseMeminfo(): { totalMB: number; usedMB: number; availableMB: number } {
-    try {
-        const content = fs.readFileSync(path.join(PROC_BASE, "meminfo"), "utf8");
-        const get = (key: string): number => {
-            const match = content.match(new RegExp(`${key}:\\s+(\\d+)`));
-            return match ? parseInt(match[1], 10) / 1024 : 0; // kB -> MB
-        };
-        const total = get("MemTotal");
-        const available = get("MemAvailable");
-        return {
-            totalMB: Math.round(total),
-            usedMB: Math.round(total - available),
-            availableMB: Math.round(available),
-        };
-    } catch {
-        return { totalMB: 0, usedMB: 0, availableMB: 0 };
-    }
-}
-
-let prevCpuIdle = 0;
-let prevCpuTotal = 0;
-
-function parseCpuPercent(): number {
-    try {
-        const content = fs.readFileSync(path.join(PROC_BASE, "stat"), "utf8");
-        const line = content.split("\n").find(l => l.startsWith("cpu "));
-        if (!line) return 0;
-        const parts = line.split(/\s+/).slice(1).map(Number);
-        const idle = parts[3] + (parts[4] || 0); // idle + iowait
-        const total = parts.reduce((a, b) => a + b, 0);
-        const diffIdle = idle - prevCpuIdle;
-        const diffTotal = total - prevCpuTotal;
-        prevCpuIdle = idle;
-        prevCpuTotal = total;
-        if (diffTotal === 0) return 0;
-        return Math.round((1 - diffIdle / diffTotal) * 100);
-    } catch {
-        return 0;
-    }
-}
+// ─── Host Metrics (dashboard-local) ───
 
 function parseLoadAvg(): { load1: number; load5: number; load15: number } {
     try {
@@ -111,27 +79,7 @@ function parseLoadAvg(): { load1: number; load5: number; load15: number } {
     }
 }
 
-function getDiskUsage(): { totalGB: number; usedGB: number; availGB: number } {
-    try {
-        const stats = fs.statfsSync(TINYCLAW_DIR);
-        const blockSize = stats.bsize;
-        const totalGB = Math.round((stats.blocks * blockSize) / 1024 ** 3 * 10) / 10;
-        const availGB = Math.round((stats.bavail * blockSize) / 1024 ** 3 * 10) / 10;
-        return { totalGB, usedGB: Math.round((totalGB - availGB) * 10) / 10, availGB };
-    } catch {
-        return { totalGB: 0, usedGB: 0, availGB: 0 };
-    }
-}
-
 // ─── Helpers ───
-
-function countFiles(dir: string): number {
-    try {
-        return fs.readdirSync(dir).filter(f => f.endsWith(".json")).length;
-    } catch {
-        return 0;
-    }
-}
 
 function readJsonSafe<T>(filePath: string, fallback: T): T {
     try {
@@ -169,6 +117,9 @@ function readNewBytes(filePath: string, state: TailState): string | null {
 
 const app = express();
 
+// JSON body parser (needed for POST endpoints)
+app.use(express.json());
+
 // Serve static files
 app.use("/static", express.static(STATIC_DIR));
 
@@ -193,13 +144,18 @@ app.get("/api/status", (_req, res) => {
         path.join(TINYCLAW_DIR, "threads.json"),
         {},
     );
-    const queueIncoming = countFiles(path.join(TINYCLAW_DIR, "queue/incoming"));
-    const queueProcessing = countFiles(path.join(TINYCLAW_DIR, "queue/processing"));
-    const queueDeadLetter = countFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
-    const mem = parseMeminfo();
+    const queueIncoming = countQueueFiles(path.join(TINYCLAW_DIR, "queue/incoming"));
+    const queueProcessing = countQueueFiles(path.join(TINYCLAW_DIR, "queue/processing"));
+    const queueDeadLetter = countQueueFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
+    const memBytes = parseMeminfo();
     const cpu = parseCpuPercent();
     const load = parseLoadAvg();
-    const disk = getDiskUsage();
+    const disk = getDiskUsage(TINYCLAW_DIR);
+    const mem = {
+        totalMB: Math.round(memBytes.totalBytes / 1024 / 1024),
+        usedMB: Math.round((memBytes.totalBytes - memBytes.availableBytes) / 1024 / 1024),
+        availableMB: Math.round(memBytes.availableBytes / 1024 / 1024),
+    };
 
     res.json({
         status: "ok",
@@ -227,7 +183,7 @@ app.get("/api/threads", (_req, res) => {
 // GET /api/threads/:id/messages — message history filtered by threadId
 app.get("/api/threads/:id/messages", (req, res) => {
     const threadId = parseInt(req.params.id, 10);
-    const limit = parseInt((req.query as Record<string, string>).n || "50", 10);
+    const limit = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
     const entries = readRecentJsonl<Record<string, unknown>>(
         path.join(TINYCLAW_DIR, "message-history.jsonl"),
         500,
@@ -238,12 +194,12 @@ app.get("/api/threads/:id/messages", (req, res) => {
 
 // GET /api/messages/recent?n=50 — recent messages across all threads
 app.get("/api/messages/recent", (req, res) => {
-    const n = parseInt((req.query as Record<string, string>).n || "50", 10);
+    const n = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
     const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "message-history.jsonl"), n);
     res.json(entries);
 });
 
-// GET /api/messages/feed — SSE stream of new messages
+// GET /api/messages/feed — SSE stream of new messages (broadcast pattern)
 app.get("/api/messages/feed", (_req, res) => {
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -253,35 +209,25 @@ app.get("/api/messages/feed", (_req, res) => {
     res.write(":\n\n"); // SSE comment to establish connection
 
     const historyFile = path.join(TINYCLAW_DIR, "message-history.jsonl");
-    const clientState: TailState = { offset: 0 };
+    const tailState: TailState = { offset: 0 };
 
     // Initialize to current EOF so we only send new messages
     if (fs.existsSync(historyFile)) {
         const stat = fs.statSync(historyFile);
-        clientState.offset = stat.size;
+        tailState.offset = stat.size;
     }
 
-    const interval = setInterval(() => {
-        const content = readNewBytes(historyFile, clientState);
-        if (content === null) return;
-
-        const lines = content.split("\n").filter(l => l.trim());
-        for (const line of lines) {
-            try {
-                JSON.parse(line); // validate JSON
-                res.write(`data: ${line}\n\n`);
-            } catch {
-                /* skip malformed */
-            }
-        }
-    }, 2000);
+    const client: FeedClient = { res, tailState };
+    messageFeedClients.add(client);
+    startMessageFeed();
 
     _req.on("close", () => {
-        clearInterval(interval);
+        messageFeedClients.delete(client);
+        stopMessageFeedIfIdle();
     });
 });
 
-// GET /api/routing/feed — SSE stream of routing decisions
+// GET /api/routing/feed — SSE stream of routing decisions (broadcast pattern)
 app.get("/api/routing/feed", (_req, res) => {
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -291,62 +237,373 @@ app.get("/api/routing/feed", (_req, res) => {
     res.write(":\n\n");
 
     const routingFile = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
-    const clientState: TailState = { offset: 0 };
+    const tailState: TailState = { offset: 0 };
 
     if (fs.existsSync(routingFile)) {
         const stat = fs.statSync(routingFile);
-        clientState.offset = stat.size;
+        tailState.offset = stat.size;
     }
 
-    const interval = setInterval(() => {
-        const content = readNewBytes(routingFile, clientState);
-        if (content === null) return;
-
-        const lines = content.split("\n").filter(l => l.trim());
-        for (const line of lines) {
-            try {
-                JSON.parse(line); // validate
-                res.write(`data: ${line}\n\n`);
-            } catch {
-                /* skip malformed */
-            }
-        }
-    }, 2000);
+    const client: FeedClient = { res, tailState };
+    routingFeedClients.add(client);
+    startRoutingFeed();
 
     _req.on("close", () => {
-        clearInterval(interval);
+        routingFeedClients.delete(client);
+        stopRoutingFeedIfIdle();
     });
 });
 
 // GET /api/routing/recent?n=50
 app.get("/api/routing/recent", (req, res) => {
-    const n = parseInt((req.query as Record<string, string>).n || "50", 10);
+    const n = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
     const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "logs/routing.jsonl"), n);
     res.json(entries);
 });
 
 // GET /api/prompts/recent?n=20
 app.get("/api/prompts/recent", (req, res) => {
-    const n = parseInt((req.query as Record<string, string>).n || "20", 10);
+    const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
     const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "logs/prompts.jsonl"), n);
     res.json(entries);
 });
 
 // GET /api/metrics — CPU, RAM, disk, load
 app.get("/api/metrics", (_req, res) => {
+    const memBytes = parseMeminfo();
     res.json({
         cpu: parseCpuPercent(),
-        mem: parseMeminfo(),
+        mem: {
+            totalMB: Math.round(memBytes.totalBytes / 1024 / 1024),
+            usedMB: Math.round((memBytes.totalBytes - memBytes.availableBytes) / 1024 / 1024),
+            availableMB: Math.round(memBytes.availableBytes / 1024 / 1024),
+        },
         load: parseLoadAvg(),
-        disk: getDiskUsage(),
+        disk: getDiskUsage(TINYCLAW_DIR),
         timestamp: Date.now(),
+    });
+});
+
+// ─── Docker Container Management ───
+
+function parseMemoryLimit(limit: string): number | null {
+    const match = limit.match(/^(\d+(?:\.\d+)?)\s*(b|k|kb|m|mb|g|gb)?$/i);
+    if (!match) return null;
+    const num = parseFloat(match[1]);
+    const unit = (match[2] || "b").toLowerCase();
+    switch (unit) {
+        case "k":
+        case "kb":
+            return Math.round(num * 1024);
+        case "m":
+        case "mb":
+            return Math.round(num * 1024 * 1024);
+        case "g":
+        case "gb":
+            return Math.round(num * 1024 * 1024 * 1024);
+        default:
+            return Math.round(num);
+    }
+}
+
+// ─── SSE Broadcast Infrastructure ───
+
+// Per-client state for JSONL tail feeds (each client tracks its own byte offset)
+interface FeedClient {
+    res: http.ServerResponse;
+    tailState: TailState;
+}
+
+// ─── Message Feed (broadcast pattern) ───
+
+const messageFeedClients = new Set<FeedClient>();
+let messageFeedInterval: ReturnType<typeof setInterval> | null = null;
+
+function startMessageFeed(): void {
+    if (messageFeedInterval) return;
+    const historyFile = path.join(TINYCLAW_DIR, "message-history.jsonl");
+    messageFeedInterval = setInterval(() => {
+        if (messageFeedClients.size === 0) return;
+        for (const client of messageFeedClients) {
+            const content = readNewBytes(historyFile, client.tailState);
+            if (content === null) continue;
+            const lines = content.split("\n").filter(l => l.trim());
+            for (const line of lines) {
+                try { JSON.parse(line); } catch { continue; } // skip malformed
+                try {
+                    client.res.write(`data: ${line}\n\n`);
+                } catch {
+                    messageFeedClients.delete(client);
+                    break;
+                }
+            }
+        }
+    }, 2000);
+}
+
+function stopMessageFeedIfIdle(): void {
+    if (messageFeedClients.size === 0 && messageFeedInterval) {
+        clearInterval(messageFeedInterval);
+        messageFeedInterval = null;
+    }
+}
+
+// ─── Routing Feed (broadcast pattern) ───
+
+const routingFeedClients = new Set<FeedClient>();
+let routingFeedInterval: ReturnType<typeof setInterval> | null = null;
+
+function startRoutingFeed(): void {
+    if (routingFeedInterval) return;
+    const routingFile = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
+    routingFeedInterval = setInterval(() => {
+        if (routingFeedClients.size === 0) return;
+        for (const client of routingFeedClients) {
+            const content = readNewBytes(routingFile, client.tailState);
+            if (content === null) continue;
+            const lines = content.split("\n").filter(l => l.trim());
+            for (const line of lines) {
+                try { JSON.parse(line); } catch { continue; } // skip malformed
+                try {
+                    client.res.write(`data: ${line}\n\n`);
+                } catch {
+                    routingFeedClients.delete(client);
+                    break;
+                }
+            }
+        }
+    }, 2000);
+}
+
+function stopRoutingFeedIfIdle(): void {
+    if (routingFeedClients.size === 0 && routingFeedInterval) {
+        clearInterval(routingFeedInterval);
+        routingFeedInterval = null;
+    }
+}
+
+// ─── Log Feed (broadcast pattern, one group per log type) ───
+
+const logFeedClients: Record<string, Set<FeedClient>> = {};
+const logFeedIntervals: Record<string, ReturnType<typeof setInterval>> = {};
+
+function getLogFilePath(type: string): string {
+    return type === "telegram"
+        ? path.join(TINYCLAW_DIR, "logs/telegram.log")
+        : path.join(TINYCLAW_DIR, "logs/queue.log");
+}
+
+function startLogFeed(type: string): void {
+    if (logFeedIntervals[type]) return;
+    if (!logFeedClients[type]) logFeedClients[type] = new Set();
+    const logFile = getLogFilePath(type);
+    logFeedIntervals[type] = setInterval(() => {
+        const clients = logFeedClients[type];
+        if (!clients || clients.size === 0) return;
+        for (const client of clients) {
+            const content = readNewBytes(logFile, client.tailState);
+            if (content === null) continue;
+            const lines = content.split("\n").filter(l => l.trim());
+            for (const line of lines) {
+                try {
+                    client.res.write(`data: ${JSON.stringify(line)}\n\n`);
+                } catch {
+                    clients.delete(client);
+                    break;
+                }
+            }
+        }
+    }, 2000);
+}
+
+function stopLogFeedIfIdle(type: string): void {
+    const clients = logFeedClients[type];
+    if ((!clients || clients.size === 0) && logFeedIntervals[type]) {
+        clearInterval(logFeedIntervals[type]);
+        delete logFeedIntervals[type];
+    }
+}
+
+// ─── Container Feed (server-side polling with broadcast) ───
+
+const containerFeedClients = new Set<http.ServerResponse>();
+let containerFeedInterval: ReturnType<typeof setInterval> | null = null;
+let containerFeedPolling = false;
+
+function startContainerFeed(): void {
+    if (containerFeedInterval) return;
+    containerFeedInterval = setInterval(async () => {
+        if (containerFeedClients.size === 0) return;
+        // Skip this tick if the previous poll is still running (overlap guard)
+        if (containerFeedPolling) return;
+        containerFeedPolling = true;
+        try {
+            const containers = await getDevContainers(DOCKER_PROXY_URL);
+            const host = parseMeminfo();
+            const allocatedTotal = containers.reduce((sum, c) => sum + c.memory.limit, 0);
+            const data = JSON.stringify({
+                containers,
+                host: {
+                    totalMemory: host.totalBytes,
+                    availableMemory: host.availableBytes,
+                    allocatedTotal,
+                    osReserve: OS_RESERVE_BYTES,
+                },
+            });
+            for (const client of containerFeedClients) {
+                try {
+                    client.write(`data: ${data}\n\n`);
+                } catch {
+                    containerFeedClients.delete(client);
+                }
+            }
+        } catch {
+            // Docker API may be unavailable, skip this tick
+        } finally {
+            containerFeedPolling = false;
+        }
+    }, 5000);
+}
+
+function stopContainerFeedIfIdle(): void {
+    if (containerFeedClients.size === 0 && containerFeedInterval) {
+        clearInterval(containerFeedInterval);
+        containerFeedInterval = null;
+    }
+}
+
+// GET /api/containers — list all dev containers with memory stats
+app.get("/api/containers", async (_req, res) => {
+    try {
+        const containers = await getDevContainers(DOCKER_PROXY_URL);
+        const host = parseMeminfo();
+        const allocatedTotal = containers.reduce((sum, c) => sum + c.memory.limit, 0);
+        res.json({
+            containers,
+            host: {
+                totalMemory: host.totalBytes,
+                availableMemory: host.availableBytes,
+                allocatedTotal,
+                osReserve: OS_RESERVE_BYTES,
+            },
+        });
+    } catch (err) {
+        const msg = toErrorMessage(err);
+        res.status(502).json({ error: "Failed to fetch containers", detail: msg });
+    }
+});
+
+// GET /api/containers/:id/stats — live memory stats for a specific container
+app.get("/api/containers/:id/stats", async (req, res) => {
+    try {
+        const containerId = String(req.params.id);
+        if (!isValidContainerId(containerId)) {
+            res.status(400).json({ error: "Invalid container ID. Expected 12-64 hex characters." });
+            return;
+        }
+        const stats = await fetchDockerStats(DOCKER_PROXY_URL, containerId);
+        const inspect = await fetchDockerJson<DockerContainerInspect>(
+            DOCKER_PROXY_URL,
+            `/containers/${containerId}/json`,
+        );
+        const usage = stats.memory_stats?.usage || 0;
+        const limit = inspect.HostConfig.Memory || stats.memory_stats?.limit || 0;
+        res.json({
+            id: containerId,
+            name: (inspect.Name || "").replace(/^\//, ""),
+            memory: {
+                usage,
+                limit,
+                usagePercent: limit > 0 ? Math.round((usage / limit) * 1000) / 10 : 0,
+            },
+            pids: stats.pids_stats?.current || 0,
+        });
+    } catch (err) {
+        const msg = toErrorMessage(err);
+        res.status(502).json({ error: "Failed to fetch container stats", detail: msg });
+    }
+});
+
+// POST /api/containers/:id/memory — update memory limit
+app.post("/api/containers/:id/memory", async (req, res) => {
+    try {
+        const containerId = String(req.params.id);
+        if (!isValidContainerId(containerId)) {
+            res.status(400).json({ error: "Invalid container ID. Expected 12-64 hex characters." });
+            return;
+        }
+        const limitStr = (req.body as { limit?: string })?.limit;
+        if (!limitStr || typeof limitStr !== "string") {
+            res.status(400).json({ error: "Missing or invalid 'limit' field (e.g. '4g', '2048m')" });
+            return;
+        }
+
+        const newLimitBytes = parseMemoryLimit(limitStr);
+        if (newLimitBytes === null) {
+            res.status(400).json({ error: "Invalid memory limit format. Use e.g. '4g', '2048m', '1.5gb'" });
+            return;
+        }
+        const hostMem = parseMeminfo();
+
+        const result = await validateAndUpdateMemory(
+            DOCKER_PROXY_URL,
+            containerId,
+            newLimitBytes,
+            hostMem.totalBytes,
+        );
+
+        res.json(result);
+    } catch (err) {
+        const msg = toErrorMessage(err);
+        const status = err instanceof ValidationError ? 400 : 502;
+        res.status(status).json({ error: msg });
+    }
+});
+
+// GET /api/host/memory — host total RAM and current usage
+app.get("/api/host/memory", (_req, res) => {
+    const hostMem = parseMeminfo();
+    res.json({
+        totalMemory: hostMem.totalBytes,
+        availableMemory: hostMem.availableBytes,
+        usedMemory: hostMem.totalBytes - hostMem.availableBytes,
+        osReserve: OS_RESERVE_BYTES,
+        maxAllocatable: hostMem.totalBytes - OS_RESERVE_BYTES,
+    });
+});
+
+// GET /api/containers/feed — SSE stream of container memory stats
+app.get("/api/containers/feed", (_req, res) => {
+    res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+    });
+    res.write(":\n\n"); // SSE comment to establish connection
+
+    containerFeedClients.add(res);
+    startContainerFeed();
+
+    _req.on("close", () => {
+        containerFeedClients.delete(res);
+        stopContainerFeedIfIdle();
     });
 });
 
 // ─── Session Log Helpers ───
 
 function findSessionLogFile(sessionId: string): string | null {
-    const logFile = path.join(SESSIONS_DIR, `${sessionId}.jsonl`);
+    // Validate sessionId format (UUID) to prevent path traversal
+    if (!isValidSessionId(sessionId)) return null;
+
+    const safeId = path.basename(sessionId); // defense in depth
+    const logFile = path.join(SESSIONS_DIR, `${safeId}.jsonl`);
+
+    // Verify resolved path stays within SESSIONS_DIR
+    const resolvedPath = path.resolve(logFile);
+    const resolvedSessionsDir = path.resolve(SESSIONS_DIR);
+    if (!resolvedPath.startsWith(resolvedSessionsDir + path.sep)) return null;
+
     if (fs.existsSync(logFile)) return logFile;
     return null;
 }
@@ -371,7 +628,7 @@ function tailLines(filePath: string, n: number): string[] {
 // GET /api/threads/:id/session-logs?n=20 — tail of Claude SDK session log
 app.get("/api/threads/:id/session-logs", (req, res) => {
     const threadId = req.params.id;
-    const n = Math.min(parseInt((req.query as Record<string, string>).n || "20", 10), 200);
+    const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
 
     const threads = readJsonSafe<Record<string, { sessionId?: string; cwd?: string }>>(
         path.join(TINYCLAW_DIR, "threads.json"),
@@ -396,7 +653,7 @@ app.get("/api/threads/:id/session-logs", (req, res) => {
 
 // GET /api/session-logs?n=20 — all active threads' session log tails
 app.get("/api/session-logs", (req, res) => {
-    const n = Math.min(parseInt((req.query as Record<string, string>).n || "20", 10), 200);
+    const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
 
     const threads = readJsonSafe<Record<string, { sessionId?: string; name?: string }>>(
         path.join(TINYCLAW_DIR, "threads.json"),
@@ -421,13 +678,10 @@ app.get("/api/session-logs", (req, res) => {
     res.json(results);
 });
 
-// GET /api/logs/:type — SSE stream of log files (telegram | queue)
+// GET /api/logs/:type — SSE stream of log files (telegram | queue) (broadcast pattern)
 app.get("/api/logs/:type", (req, res) => {
     const type = req.params.type;
-    const logFile =
-        type === "telegram"
-            ? path.join(TINYCLAW_DIR, "logs/telegram.log")
-            : path.join(TINYCLAW_DIR, "logs/queue.log");
+    const logFile = getLogFilePath(type);
 
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -436,26 +690,22 @@ app.get("/api/logs/:type", (req, res) => {
     });
     res.write(":\n\n");
 
-    const clientState: TailState = { offset: 0 };
+    const tailState: TailState = { offset: 0 };
 
     if (fs.existsSync(logFile)) {
         const stat = fs.statSync(logFile);
         // Start from last 4KB to show some initial context
-        clientState.offset = Math.max(0, stat.size - 4096);
+        tailState.offset = Math.max(0, stat.size - 4096);
     }
 
-    const interval = setInterval(() => {
-        const content = readNewBytes(logFile, clientState);
-        if (content === null) return;
-
-        const lines = content.split("\n").filter(l => l.trim());
-        for (const line of lines) {
-            res.write(`data: ${JSON.stringify(line)}\n\n`);
-        }
-    }, 2000);
+    const client: FeedClient = { res, tailState };
+    if (!logFeedClients[type]) logFeedClients[type] = new Set();
+    logFeedClients[type].add(client);
+    startLogFeed(type);
 
     req.on("close", () => {
-        clearInterval(interval);
+        logFeedClients[type]?.delete(client);
+        stopLogFeedIfIdle(type);
     });
 });
 
