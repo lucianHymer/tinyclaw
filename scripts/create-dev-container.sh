@@ -27,6 +27,13 @@ if [ ! -f "$SSH_KEY_FILE" ]; then
     exit 1
 fi
 
+# Preflight: check /secrets/ files exist (Docker silently creates directories for missing bind-mount sources)
+if [ ! -f /secrets/broker-env.sh ]; then
+    log "ERROR: /secrets/broker-env.sh not found. Create it with:"
+    log '  printf "export CREDENTIAL_BROKER_URL=http://broker:3000\nexport BROKER_SECRET=<secret>\n" | sudo tee /secrets/broker-env.sh'
+    exit 1
+fi
+
 # Discover the dev network (separate from internal — dev containers can't reach dashboard/docker-proxy)
 NETWORK=$(docker network ls --filter "label=com.docker.compose.project=tinyclaw" \
     --format '{{.Name}}' | grep dev || true)
