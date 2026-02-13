@@ -62,6 +62,21 @@ read_settings_file() {
 # ─── Commands ─────────────────────────────────────────────────────────────────
 
 cmd_start() {
+    # Preflight: ensure github-installations.json exists and is populated
+    local installations="$SCRIPT_DIR/secrets/github-installations.json"
+    if [ ! -f "$installations" ] || [ ! -s "$installations" ]; then
+        echo -e "${RED}Missing: secrets/github-installations.json${NC}"
+        echo "  Copy the example and fill in your org + installation ID:"
+        echo "    cp secrets/github-installations.json.example secrets/github-installations.json"
+        echo "    vim secrets/github-installations.json"
+        exit 1
+    fi
+
+    # Symlink project secrets to /secrets/ so dev containers can bind-mount them.
+    # (Compose mounts ./secrets/ for the bot; dev containers mount /secrets/ on the host.)
+    sudo mkdir -p /secrets
+    sudo ln -sf "$installations" /secrets/github-installations.json
+
     log "Starting Borg stack..."
     dc up -d
     echo -e "${GREEN}Borg stack started${NC}"

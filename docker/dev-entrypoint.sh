@@ -3,13 +3,12 @@ set -euo pipefail
 
 # Credential broker env vars: MCP-created containers get /etc/profile.d/broker-env.sh via
 # bind mount. CLI-created containers (create-dev-container.sh) pass env vars instead.
-# Fix: Docker creates a directory when bind-mounting a non-existent host path.
-# The rm may fail on read-only bind mounts — don't crash-loop over it.
+# If the host file was missing, Docker auto-creates a directory — detect and warn.
 if [ -d /etc/profile.d/broker-env.sh ]; then
-  rm -rf /etc/profile.d/broker-env.sh 2>/dev/null || true
-fi
-# Fallback: if the file doesn't exist and env vars are set, write it for backward compat.
-if [ ! -f /etc/profile.d/broker-env.sh ] && [ -n "${CREDENTIAL_BROKER_URL:-}" ]; then
+  echo "WARNING: /etc/profile.d/broker-env.sh is a directory (host file was missing at mount time)" >&2
+  echo "  Recreate this container after ensuring /secrets/broker-env.sh exists on the host" >&2
+elif [ ! -f /etc/profile.d/broker-env.sh ] && [ -n "${CREDENTIAL_BROKER_URL:-}" ]; then
+  # Fallback for CLI-created containers that pass env vars instead of bind-mounting
   printf 'export CREDENTIAL_BROKER_URL=%s\nexport BROKER_SECRET=%s\n' \
     "$CREDENTIAL_BROKER_URL" "${BROKER_SECRET:-}" > /etc/profile.d/broker-env.sh
 fi

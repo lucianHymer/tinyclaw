@@ -34,6 +34,14 @@ if [ ! -f /secrets/broker-env.sh ]; then
     exit 1
 fi
 
+if [ ! -f /secrets/github-installations.json ] || [ ! -s /secrets/github-installations.json ]; then
+    log "ERROR: /secrets/github-installations.json is missing or empty."
+    log "  Run ./borg.sh start first (it symlinks the project's secrets/ to /secrets/),"
+    log "  or create the file manually:"
+    log "  sudo ln -sf $PROJECT_DIR/secrets/github-installations.json /secrets/github-installations.json"
+    exit 1
+fi
+
 # Discover the dev network (separate from internal — dev containers can't reach dashboard/docker-proxy)
 NETWORK=$(docker network ls --filter "label=com.docker.compose.project=borg" \
     --format '{{.Name}}' | grep dev || true)
