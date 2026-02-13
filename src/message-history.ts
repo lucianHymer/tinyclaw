@@ -116,7 +116,7 @@ export function buildHistoryContext(threadId: number, isMaster: boolean): string
         return `[${e.channel}] ${e.sender}: ${truncated}`;
     });
 
-    return "Recent messages:\n" + lines.join("\n");
+    return "Recent messages (from .tinyclaw/message-history.jsonl — read more with grep/tail if you need fuller context):\n" + lines.join("\n");
 }
 
 /**
