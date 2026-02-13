@@ -7,8 +7,8 @@ import fs from "fs";
 import path from "path";
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
-const HISTORY_FILE = path.join(SCRIPT_DIR, ".tinyclaw/message-history.jsonl");
-const HISTORY_BACKUP = path.join(SCRIPT_DIR, ".tinyclaw/message-history.1.jsonl");
+const HISTORY_FILE = path.join(SCRIPT_DIR, ".borg/message-history.jsonl");
+const HISTORY_BACKUP = path.join(SCRIPT_DIR, ".borg/message-history.1.jsonl");
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export type MessageSource = "user" | "cross-thread" | "heartbeat" | "cli" | "system";
@@ -116,7 +116,7 @@ export function buildHistoryContext(threadId: number, isMaster: boolean): string
         return `[${e.channel}] ${e.sender}: ${truncated}`;
     });
 
-    return "Recent messages (from .tinyclaw/message-history.jsonl — read more with grep/tail if you need fuller context):\n" + lines.join("\n");
+    return "Recent messages (from .borg/message-history.jsonl — read more with grep/tail if you need fuller context):\n" + lines.join("\n");
 }
 
 /**

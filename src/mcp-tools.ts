@@ -29,12 +29,12 @@ import { loadThreads } from "./session-manager.js";
 import { toErrorMessage, parseSSHPublicKey, parseDevEmail } from "./types.js";
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
-const TINYCLAW_DIR = path.join(PROJECT_DIR, ".tinyclaw");
-const QUEUE_INCOMING = path.join(TINYCLAW_DIR, "queue/incoming");
-const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
+const BORG_DIR = path.join(PROJECT_DIR, ".borg");
+const QUEUE_INCOMING = path.join(BORG_DIR, "queue/incoming");
+const QUEUE_OUTGOING = path.join(BORG_DIR, "queue/outgoing");
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://docker-proxy:2375";
 const PUBLIC_HOST = process.env.PUBLIC_HOST || "localhost";
-const DEV_NETWORK = process.env.DEV_NETWORK || "tinyclaw_dev";
+const DEV_NETWORK = process.env.DEV_NETWORK || "borg_dev";
 const COMPOSE_PROJECT = String(process.env["COMPOSE_PROJECT"] ?? "");
 
 function textContent(text: string) {
@@ -45,10 +45,10 @@ function textContent(text: string) {
  * Create an MCP server bound to a specific source thread.
  * Each query gets its own instance so cross-thread messages carry the correct sourceThreadId.
  */
-export function createTinyClawMcpServer(sourceThreadId: number) {
+export function createBorgMcpServer(sourceThreadId: number) {
     const sendMessage = tool(
         "send_message",
-        "Send a message to another TinyClaw thread (Telegram forum topic). The message will appear in that thread and be processed by its agent.",
+        "Send a message to another Borg thread (Telegram forum topic). The message will appear in that thread and be processed by its agent.",
         { targetThreadId: z.number(), message: z.string() },
         async ({ targetThreadId, message }) => {
             if (targetThreadId === sourceThreadId) {
@@ -120,7 +120,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
     const listThreads = tool(
         "list_threads",
-        "List all active TinyClaw threads (Telegram forum topics) with their IDs and names.",
+        "List all active Borg threads (Telegram forum topics) with their IDs and names.",
         {},
         async () => {
             try {
@@ -312,13 +312,13 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
                 const cpuPercent = parseCpuPercent();
                 const { totalBytes, availableBytes } = parseMeminfo();
                 const usedBytes = totalBytes - availableBytes;
-                const disk = getDiskUsage(TINYCLAW_DIR);
+                const disk = getDiskUsage(BORG_DIR);
                 const loadAvg = os.loadavg();
 
                 const queueIncoming = countQueueFiles(QUEUE_INCOMING);
                 const queueOutgoing = countQueueFiles(QUEUE_OUTGOING);
-                const queueProcessing = countQueueFiles(path.join(TINYCLAW_DIR, "queue/processing"));
-                const queueDeadLetter = countQueueFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
+                const queueProcessing = countQueueFiles(path.join(BORG_DIR, "queue/processing"));
+                const queueDeadLetter = countQueueFiles(path.join(BORG_DIR, "queue/dead-letter"));
 
                 const lines = [
                     `== CPU ==`,
@@ -448,7 +448,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
 
     const deleteDevContainerTool = tool(
         "delete_dev_container",
-        "Permanently delete a dev container by name (e.g., 'dev-alice'). This is IRREVERSIBLE — all data inside the container is lost and the port is freed. Stops the container first if running. Only works on containers with the tinyclaw.type=dev-container label. IMPORTANT: Always confirm with the user before calling this tool.",
+        "Permanently delete a dev container by name (e.g., 'dev-alice'). This is IRREVERSIBLE — all data inside the container is lost and the port is freed. Stops the container first if running. Only works on containers with the borg.type=dev-container label. IMPORTANT: Always confirm with the user before calling this tool.",
         {
             name: z.string().describe("Container name (e.g., 'dev-alice')"),
         },
@@ -481,7 +481,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
     }
 
     return createSdkMcpServer({
-        name: "tinyclaw",
+        name: "borg",
         version: "1.0.0",
         tools,
     });

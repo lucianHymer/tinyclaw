@@ -1,5 +1,5 @@
 /**
- * Shared types and utilities used across TinyClaw modules.
+ * Shared types and utilities used across Borg modules.
  */
 
 import type { MessageSource } from "./message-history.js";

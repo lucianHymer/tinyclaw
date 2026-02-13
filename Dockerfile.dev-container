@@ -61,7 +61,7 @@ RUN chmod +x /usr/local/bin/github-token-helper.sh /usr/local/bin/gh-wrapper.sh
 # Git config (credential broker integration)
 RUN git config --system credential.helper '!/usr/local/bin/github-token-helper.sh' \
     && git config --system user.name "Dev" \
-    && git config --system user.email "dev@tinyclaw"
+    && git config --system user.email "dev@borg"
 
 # Replace gh binary with wrapper
 RUN mv /usr/bin/gh /usr/bin/gh-real \
@@ -83,12 +83,12 @@ RUN chmod +x /usr/local/bin/dev-entrypoint.sh
 RUN rm -rf /etc/update-motd.d/* /etc/legal && : > /etc/motd
 
 # Custom welcome message (shown inside tmux on first shell)
-COPY docker/motd /etc/tinyclaw-motd
-RUN chmod +x /etc/tinyclaw-motd \
+COPY docker/motd /etc/borg-motd
+RUN chmod +x /etc/borg-motd \
     && echo '#!/bin/bash' > /etc/profile.d/zzz-welcome.sh \
-    && echo 'if [ -n "$TMUX" ] && [ -t 1 ] && [ ! -f /tmp/.tinyclaw-welcome ]; then' >> /etc/profile.d/zzz-welcome.sh \
-    && echo '    /etc/tinyclaw-motd' >> /etc/profile.d/zzz-welcome.sh \
-    && echo '    touch /tmp/.tinyclaw-welcome' >> /etc/profile.d/zzz-welcome.sh \
+    && echo 'if [ -n "$TMUX" ] && [ -t 1 ] && [ ! -f /tmp/.borg-welcome ]; then' >> /etc/profile.d/zzz-welcome.sh \
+    && echo '    /etc/borg-motd' >> /etc/profile.d/zzz-welcome.sh \
+    && echo '    touch /tmp/.borg-welcome' >> /etc/profile.d/zzz-welcome.sh \
     && echo 'fi' >> /etc/profile.d/zzz-welcome.sh \
     && chmod +x /etc/profile.d/zzz-welcome.sh
 

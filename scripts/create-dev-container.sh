@@ -35,16 +35,16 @@ if [ ! -f /secrets/broker-env.sh ]; then
 fi
 
 # Discover the dev network (separate from internal — dev containers can't reach dashboard/docker-proxy)
-NETWORK=$(docker network ls --filter "label=com.docker.compose.project=tinyclaw" \
+NETWORK=$(docker network ls --filter "label=com.docker.compose.project=borg" \
     --format '{{.Name}}' | grep dev || true)
 if [ -z "$NETWORK" ]; then
-    log "ERROR: Could not find tinyclaw dev network. Is docker-compose running?"
+    log "ERROR: Could not find borg dev network. Is docker-compose running?"
     exit 1
 fi
 
 # Build image if not exists
 log "Building dev container image..."
-docker build -t tinyclaw-dev -f "$PROJECT_DIR/Dockerfile.dev-container" "$PROJECT_DIR"
+docker build -t borg-dev -f "$PROJECT_DIR/Dockerfile.dev-container" "$PROJECT_DIR"
 
 # Create and start container
 log "Creating container dev-${DEV_NAME} on port ${SSH_PORT} with ${MEMORY_LIMIT} memory"
@@ -52,7 +52,7 @@ docker run -d \
     --name "dev-${DEV_NAME}" \
     --network "${NETWORK}" \
     --hostname "dev-${DEV_NAME}" \
-    --label "tinyclaw.type=dev-container" \
+    --label "borg.type=dev-container" \
     -p "${SSH_PORT}:22" \
     --memory "${MEMORY_LIMIT}" \
     --memory-swap "${MEMORY_LIMIT}" \
@@ -62,7 +62,7 @@ docker run -d \
     -v "/secrets/broker-env.sh:/etc/profile.d/broker-env.sh:ro" \
     -v "/secrets/github-installations.json:/secrets/github-installations.json:ro" \
     --restart unless-stopped \
-    tinyclaw-dev
+    borg-dev
 
 # Inject SSH key
 docker exec "dev-${DEV_NAME}" bash -c \

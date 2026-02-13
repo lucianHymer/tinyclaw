@@ -37,9 +37,9 @@ export interface Settings {
 // ─── Constants ───
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
-const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
-const THREADS_FILE = path.join(TINYCLAW_DIR, "threads.json");
-const SETTINGS_FILE = path.join(TINYCLAW_DIR, "settings.json");
+const BORG_DIR = path.join(SCRIPT_DIR, ".borg");
+const THREADS_FILE = path.join(BORG_DIR, "threads.json");
+const SETTINGS_FILE = path.join(BORG_DIR, "settings.json");
 const DEFAULT_CWD = process.env.DEFAULT_CWD || "/home/clawcian/.openclaw/workspace";
 export const MAX_CONCURRENT_SESSIONS = 2;
 
@@ -160,20 +160,20 @@ export function sanitizeHeartbeatContent(raw: string): string {
 // ─── System Prompt Building Blocks ───
 
 function buildPreamble(): string {
-    return `You are TinyClaw, an AI assistant that users communicate with through Telegram. You are a full Claude Code agent with file access, code editing, terminal commands, and web search. Users send you messages in a Telegram forum topic and you respond there. Treat every incoming message as a direct conversation with the user — be helpful, conversational, and action-oriented.
+    return `You are Borg, an AI assistant that users communicate with through Telegram. You are a full Claude Code agent with file access, code editing, terminal commands, and web search. Users send you messages in a Telegram forum topic and you respond there. Treat every incoming message as a direct conversation with the user — be helpful, conversational, and action-oriented.
 
 Multiple team members may message you. Each message is prefixed with the sender's name (e.g. "[Lucian via Telegram]:"). Pay attention to who is talking — address them by name when appropriate and keep track of what each person is working on or asking about.
 
 ## Your Persistent Memory
 
-Your conversation memory is stored in \`.tinyclaw/message-history.jsonl\` — a JSONL file containing all messages across all threads, tagged by threadId. This is your ground truth for what has been said.
+Your conversation memory is stored in \`.borg/message-history.jsonl\` — a JSONL file containing all messages across all threads, tagged by threadId. This is your ground truth for what has been said.
 
 **Use it proactively:**
 - When you start a new session or feel you're missing context, grep this file for your threadId to catch up
 - When a user references something you don't remember, check the file before saying you don't know
 - When your context gets compacted (long conversations), earlier messages are summarized — the JSONL file has the originals
 - Format: each line is JSON with \`threadId\`, \`sender\`, \`message\`, \`channel\`, \`timestamp\` fields
-- Read it with: \`grep '"threadId":YOUR_ID' .tinyclaw/message-history.jsonl | tail -50\`
+- Read it with: \`grep '"threadId":YOUR_ID' .borg/message-history.jsonl | tail -50\`
 
 This file is always available and always up-to-date. Prefer checking it over telling a user you lack context.`;
 }
@@ -186,24 +186,24 @@ function buildGithubBlock(): string {
 }
 
 function buildCommandsBlock(): string {
-    return `- Reset a thread: Write {"command": "reset", "threadId": N, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/
-- Change working directory: Write {"command": "setdir", "threadId": N, "args": {"cwd": "/path"}, "timestamp": <epoch_ms>} to .tinyclaw/queue/commands/`;
+    return `- Reset a thread: Write {"command": "reset", "threadId": N, "timestamp": <epoch_ms>} to .borg/queue/commands/
+- Change working directory: Write {"command": "setdir", "threadId": N, "args": {"cwd": "/path"}, "timestamp": <epoch_ms>} to .borg/queue/commands/`;
 }
 
 function buildMasterCrossThreadBlock(): string {
     return `You can:
-- See all active threads and their status in .tinyclaw/threads.json
-- Read any thread's history from .tinyclaw/message-history.jsonl
-- Message any thread by writing to .tinyclaw/queue/outgoing/ with targetThreadId
+- See all active threads and their status in .borg/threads.json
+- Read any thread's history from .borg/message-history.jsonl
+- Message any thread by writing to .borg/queue/outgoing/ with targetThreadId
 - Broadcast to all threads by writing multiple outgoing messages
 ${buildCommandsBlock()}`;
 }
 
 function buildWorkerCrossThreadBlock(): string {
     return `Cross-thread communication:
-- Active threads: Read .tinyclaw/threads.json
-- Other threads' history: Grep .tinyclaw/message-history.jsonl for their threadId
-- Message another thread: Write JSON to .tinyclaw/queue/outgoing/ with targetThreadId field
+- Active threads: Read .borg/threads.json
+- Other threads' history: Grep .borg/message-history.jsonl for their threadId
+- Message another thread: Write JSON to .borg/queue/outgoing/ with targetThreadId field
 ${buildCommandsBlock()}`;
 }
 
@@ -252,7 +252,7 @@ function buildMcpToolsBlock(isMaster: boolean): string {
     const lines = [
         "## MCP Tools",
         "",
-        "You have these MCP tools available (use them via the tinyclaw MCP server):",
+        "You have these MCP tools available (use them via the borg MCP server):",
         "- `send_message` — Send a message to another thread by targetThreadId",
         "- `list_threads` — List all active threads with IDs, names, and working directories",
         "- `query_knowledge_base` — Read context.md, decisions.md, or active-projects.md from the knowledge base",
@@ -293,7 +293,7 @@ Rules:
 - Accept fields in any order. If someone provides multiple fields in one message, extract them all.
 - After collecting all three, display a summary and ask for confirmation before calling create_dev_container:
   "I'll create your container with: Name: Alice, Email: alice@company.com, SSH key: ed25519. Proceed?"
-- After creation succeeds, share the SSH config block and test command: \`ssh tinyclaw-<name>\`
+- After creation succeeds, share the SSH config block and test command: \`ssh borg-<name>\`
 - After creation, call get_container_stats to verify the container is running.
 - If creation fails, explain the error and suggest next steps.
 - Never echo private keys. Never include SSH key content in confirmation summaries beyond the type (ed25519/rsa).
@@ -310,8 +310,8 @@ Your runtime context:
 - Thread ID: ${runtime?.threadId ?? "unknown"}
 - Model: ${runtime?.model ?? config.model}
 - Outgoing message format: {"channel": "...", "threadId": N, "message": "...", "targetThreadId": N, ...}
-- Message history log: .tinyclaw/message-history.jsonl
-- Routing log: .tinyclaw/logs/routing.jsonl
+- Message history log: .borg/message-history.jsonl
+- Routing log: .borg/logs/routing.jsonl
 - Response truncation limit: 4000 characters`;
 }
 
@@ -435,7 +435,7 @@ Active threads in the system: ${threadInventory}
 ## Master Thread Daily Extras (applies to Daily Tier only)
 As the master thread, you do NOT send a daily summary to yourself. Instead, your "Send daily summary to master thread" task in HEARTBEAT.md should be replaced with the responsibilities below. Your daily responsibilities are:
 
-1. **Aggregate thread reports:** Check .tinyclaw/queue/incoming/ for any unprocessed daily summaries from worker threads. Read and incorporate them into active-projects.md in your knowledge base. Commit after updating: \`git add -A && git commit -m "Update: daily report aggregation"\`
+1. **Aggregate thread reports:** Check .borg/queue/incoming/ for any unprocessed daily summaries from worker threads. Read and incorporate them into active-projects.md in your knowledge base. Commit after updating: \`git add -A && git commit -m "Update: daily report aggregation"\`
 2. **Surface items needing human attention:** After reviewing all thread reports and your own checks, compile a list of anything across ALL threads that needs human intervention:
    - Failed CI checks or broken builds
    - PRs waiting on human review for >24 hours

@@ -1,5 +1,5 @@
 /**
- * Shared Docker API client for TinyClaw.
+ * Shared Docker API client for Borg.
  * Provides typed Docker API access, container listing, and memory validation.
  * All functions accept a baseUrl parameter — no hardcoded Docker endpoint.
  */
@@ -167,7 +167,7 @@ async function fetchRelevantContainers(
         fetchDockerJson<DockerContainer[]>(
             baseUrl,
             `/containers/json?all=true&filters=${encodeURIComponent(
-                JSON.stringify({ label: ["tinyclaw.type=dev-container"] }),
+                JSON.stringify({ label: ["borg.type=dev-container"] }),
             )}`,
         ),
     ]);
@@ -230,7 +230,7 @@ export async function getAllContainers(
             }
 
             const category: ContainerCategory =
-                c.Labels["tinyclaw.type"] === "dev-container" ? "dev" : "infra";
+                c.Labels["borg.type"] === "dev-container" ? "dev" : "infra";
 
             return {
                 id: c.Id,
@@ -436,7 +436,7 @@ export async function listDevContainers(baseUrl: string): Promise<Array<{
 }>> {
     return fetchDockerJson(
         baseUrl,
-        '/containers/json?all=true&filters={"label":["tinyclaw.type=dev-container"]}',
+        '/containers/json?all=true&filters={"label":["borg.type=dev-container"]}',
     );
 }
 
@@ -526,7 +526,7 @@ export async function createDevContainer(
     config: DevContainerInfraConfig,
 ): Promise<CreateContainerResult> {
     const containerSpec = {
-        Image: "tinyclaw-dev",
+        Image: "borg-dev",
         Hostname: input.name,
         Env: [
             `PROVISION_SSH_KEY=${input.sshPublicKey}`,
@@ -535,11 +535,11 @@ export async function createDevContainer(
         ],
         ExposedPorts: { "22/tcp": {} },
         Labels: {
-            "tinyclaw.type": "dev-container",
-            "tinyclaw.created-by": "mcp-tool",
-            "tinyclaw.created-at": new Date().toISOString(),
-            "tinyclaw.dev-name": input.name,
-            "tinyclaw.dev-email": input.email,
+            "borg.type": "dev-container",
+            "borg.created-by": "mcp-tool",
+            "borg.created-at": new Date().toISOString(),
+            "borg.dev-name": input.name,
+            "borg.dev-email": input.email,
         },
         HostConfig: {
             Memory: 2 * 1024 * 1024 * 1024,
@@ -613,7 +613,7 @@ export async function stopDevContainer(baseUrl: string, containerId: string): Pr
 }
 
 /**
- * Delete a container by ID. Verifies tinyclaw.type=dev-container label first.
+ * Delete a container by ID. Verifies borg.type=dev-container label first.
  * Always uses force=true (stops running containers before deletion).
  */
 export async function deleteDevContainer(
@@ -629,8 +629,8 @@ export async function deleteDevContainer(
         baseUrl,
         `/containers/${containerId}/json`,
     );
-    if (inspect.Config?.Labels?.["tinyclaw.type"] !== "dev-container") {
-        throw new ValidationError("Refusing to delete: container does not have tinyclaw.type=dev-container label.");
+    if (inspect.Config?.Labels?.["borg.type"] !== "dev-container") {
+        throw new ValidationError("Refusing to delete: container does not have borg.type=dev-container label.");
     }
 
     const resp = await fetch(`${baseUrl}/containers/${containerId}?force=true`, {
@@ -653,7 +653,7 @@ export function formatSSHConfig(result: CreateContainerResult, keyType?: string)
     else if (keyType?.startsWith("sk-ecdsa-sha2-")) identityFile = "~/.ssh/id_ecdsa_sk";
     else if (keyType?.startsWith("sk-ssh-ed25519")) identityFile = "~/.ssh/id_ed25519_sk";
     return [
-        `Host tinyclaw-${result.name.replace(/^dev-/, "")}`,
+        `Host borg-${result.name.replace(/^dev-/, "")}`,
         `  HostName ${result.host}`,
         `  Port ${result.port}`,
         `  User dev`,

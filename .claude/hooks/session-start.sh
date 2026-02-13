@@ -1,8 +1,8 @@
 #!/bin/bash
-# Session start - Load TinyClaw context
+# Session start - Load Borg context
 
 cat << 'EOF'
-🤖 TinyClaw Active
+🤖 Borg Active
 
 Running in persistent mode with:
 - Telegram forum integration (multi-topic sessions)
