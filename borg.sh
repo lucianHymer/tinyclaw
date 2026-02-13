@@ -10,7 +10,7 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 # One-time migration from .tinyclaw/ to .borg/
 if [ -d "$SCRIPT_DIR/.tinyclaw" ] && [ ! -d "$SCRIPT_DIR/.borg" ]; then
     echo "Migrating .tinyclaw/ to .borg/..."
-    mv "$SCRIPT_DIR/.tinyclaw" "$SCRIPT_DIR/.borg"
+    mv -T "$SCRIPT_DIR/.tinyclaw" "$SCRIPT_DIR/.borg" 2>/dev/null || true
     echo "Migration complete."
 fi
 

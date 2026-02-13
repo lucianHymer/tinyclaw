@@ -186,16 +186,16 @@ Not in codebase — done after deploy:
 
 ## Acceptance Criteria
 
-- [ ] `grep -ri borg src/ scripts/ *.sh *.yml *.json static/ .claude/ .gitignore .dockerignore Dockerfile*` returns zero matches
-- [ ] `grep -ri borg CLAUDE.md README.md docs/onboarding/` returns zero matches
-- [ ] `.borg/` directory no longer referenced anywhere in code
-- [ ] `npm run build` succeeds
-- [ ] `borg.sh start` launches all services correctly
-- [ ] Dashboard shows "Borg Dashboard" branding
-- [ ] MCP server registers as `"borg"`
-- [ ] Dev container creation uses `borg-dev` image and `borg.*` labels
-- [ ] Existing `.borg/` data directory auto-migrates on first `borg.sh` run
-- [ ] Docker containers use `borg` compose project name
+- [x] `grep -ri tinyclaw src/ scripts/ *.sh *.yml *.json static/ .claude/ .gitignore .dockerignore Dockerfile*` returns zero matches (only migration block in borg.sh)
+- [x] `grep -ri tinyclaw CLAUDE.md README.md docs/onboarding/` returns zero matches (only external project attribution in README)
+- [x] `.tinyclaw/` directory no longer referenced anywhere in code (except migration block)
+- [x] `npm run build` succeeds
+- [ ] `borg.sh start` launches all services correctly (requires deploy)
+- [x] Dashboard shows "Borg Dashboard" branding
+- [x] MCP server registers as `"borg"`
+- [x] Dev container creation uses `borg-dev` image and `borg.*` labels
+- [ ] Existing `.tinyclaw/` data directory auto-migrates on first `borg.sh` run (requires deploy)
+- [x] Docker containers use `borg` compose project name
 
 ## Dependencies & Risks
 
