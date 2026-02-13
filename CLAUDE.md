@@ -1,4 +1,4 @@
-# TinyClaw
+# Borg
 
 Telegram forum-based multi-session Claude agent with SDK v2, smart routing, and cross-thread orchestration.
 
@@ -13,19 +13,19 @@ Telegram forum-based multi-session Claude agent with SDK v2, smart routing, and 
 
 ## Key Files
 
-- `.tinyclaw/threads.json` — thread configurations (threadId → session mapping)
-- `.tinyclaw/message-history.jsonl` — all messages across all threads
-- `.tinyclaw/routing-log.jsonl` — routing decision audit trail
-- `.tinyclaw/message-models.json` — Telegram messageId → model mapping for reply routing
-- `.tinyclaw/settings.json` — bot token, chat ID, timezone, intervals
+- `.borg/threads.json` — thread configurations (threadId → session mapping)
+- `.borg/message-history.jsonl` — all messages across all threads
+- `.borg/routing-log.jsonl` — routing decision audit trail
+- `.borg/message-models.json` — Telegram messageId → model mapping for reply routing
+- `.borg/settings.json` — bot token, chat ID, timezone, intervals
 - `HEARTBEAT.md` — living task list for heartbeat checks (per-repo)
 
 ## Cross-Thread Communication
 
 Agents communicate through the file queue system:
-- Read `.tinyclaw/threads.json` to see active threads
-- Grep `.tinyclaw/message-history.jsonl` for any thread's history
-- Write JSON to `.tinyclaw/queue/outgoing/` with `targetThreadId` field to message another thread
+- Read `.borg/threads.json` to see active threads
+- Grep `.borg/message-history.jsonl` for any thread's history
+- Write JSON to `.borg/queue/outgoing/` with `targetThreadId` field to message another thread
 - Master thread (threadId: 1) has visibility across all threads
 
 ## Message Sources
@@ -50,5 +50,5 @@ Smart routing uses 14 weighted dimensions to classify messages as SIMPLE (haiku)
 npm run build    # TypeScript compilation
 npm run telegram # Start Telegram client
 npm run queue    # Start queue processor
-./tinyclaw.sh start  # Start all via tmux
+./borg.sh start  # Start all via tmux
 ```

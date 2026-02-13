@@ -1,10 +1,13 @@
-# TinyClaw 2: The Pinchening
+# borg
 
-Turn a Telegram forum into a multi-repo Claude Code environment. Each topic is a persistent agent session running in a specific repo on your server -- with cross-thread communication, smart model routing, and transparent GitHub auth.
+**bot org**
 
-![TinyClaw demo](docs/demo.gif)
-
-A fork of the original [TinyClaw](https://github.com/lucianHymer/tinyclaw/tree/986b10f) by **Jian**, rebuilt from the ground up.
+- Manage your org in a Telegram group -- each thread is a repo with Claude Code checked out
+- Level up your repo here, level up your repo for everyone (shared knowledge compounding)
+- Dev containers that set up the perfect environment automatically
+- Secret broker for secure credential forwarding without exposing secrets to agents
+- Spin up dev data environments on request
+- Real-time dashboard with memory management and resource monitoring
 
 ```
 Telegram Forum Group
@@ -16,6 +19,8 @@ Telegram Forum Group
 ```
 
 Every session is a full [Claude Code agent](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) with file access, code editing, terminal commands, and web search. Sessions persist across messages so context is never lost.
+
+A fork of the original [TinyClaw](https://github.com/lucianHymer/tinyclaw/tree/986b10f) by **Jian**, rebuilt from the ground up.
 
 ## Highlights
 
@@ -80,12 +85,12 @@ Supporting modules: Session Manager (thread lifecycle, system prompts), Router (
 ## Quick Start
 
 ```bash
-git clone https://github.com/lucianHymer/tinyclaw.git
-cd tinyclaw
+git clone https://github.com/lucianHymer/borg.git
+cd borg
 npm install && npm run build
 
 # First run triggers the setup wizard (bot token, chat ID, timezone)
-./tinyclaw.sh start
+./borg.sh start
 ```
 
 ### Telegram Setup
@@ -99,10 +104,10 @@ npm install && npm run build
 
 ```bash
 # Build and start all services (bot, broker, dashboard)
-./tinyclaw.sh build && ./tinyclaw.sh start
+./borg.sh build && ./borg.sh start
 
 # Or install as a systemd service
-./tinyclaw.sh install
+./borg.sh install
 ```
 
 The Docker stack includes the bot, credential broker, and dashboard as separate containers with proper health checks and resource limits.
@@ -110,11 +115,11 @@ The Docker stack includes the bot, credential broker, and dashboard as separate 
 ## CLI
 
 ```bash
-./tinyclaw.sh start|stop|restart|status
-./tinyclaw.sh send "Run the test suite"   # Send a message from CLI
-./tinyclaw.sh model [haiku|sonnet|opus]    # Show or switch model
-./tinyclaw.sh logs [telegram|queue|heartbeat]
-./tinyclaw.sh attach                       # Attach to tmux session
+./borg.sh start|stop|restart|status
+./borg.sh send "Run the test suite"   # Send a message from CLI
+./borg.sh model [haiku|sonnet|opus]    # Show or switch model
+./borg.sh logs [telegram|queue|heartbeat]
+./borg.sh attach                       # Attach to tmux session
 ```
 
 **Telegram commands**: `/reset` (fresh session), `/setdir <path>` (set working directory), `/status` (thread info)

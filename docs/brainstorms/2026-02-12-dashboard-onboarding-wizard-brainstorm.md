@@ -37,7 +37,7 @@ The result: a new dev goes from "I got invited" to "I'm SSH'd into my container"
 
 ### Slide 1: Welcome
 - Hero illustration (claw machine / mascot concept)
-- "Welcome to TinyClaw" headline
+- "Welcome to Borg" headline
 - Brief description: "Your own dev container with Claude, SSH access, and a Telegram thread."
 - [Get Started] button
 
@@ -88,13 +88,13 @@ The result: a new dev goes from "I got invited" to "I'm SSH'd into my container"
 - Celebration illustration
 - SSH config snippet with copy button (personalized with their name):
   ```
-  Host tinyclaw-<name>
+  Host borg-<name>
     HostName <server>
     Port <assigned-port>
     User dev
     IdentityFile ~/.ssh/id_ed25519
   ```
-- "Paste this into `~/.ssh/config`, then run `ssh tinyclaw-<name>`"
+- "Paste this into `~/.ssh/config`, then run `ssh borg-<name>`"
 - [Open Dashboard] button (links to `#memory` view where they can see their container)
 
 ## Key Decisions
@@ -113,7 +113,7 @@ The result: a new dev goes from "I got invited" to "I'm SSH'd into my container"
 - Accepts: `{ name, email, sshPublicKey }`
 - Sanitize name (lowercase, alphanumeric + hyphens, max 32 chars)
 - Auto-assign port from configured range (e.g., 2201-2299)
-- Create container, inject SSH key, set git config, apply labels (`tinyclaw.type=dev-container`)
+- Create container, inject SSH key, set git config, apply labels (`borg.type=dev-container`)
 - Return: `{ containerId, name, port, host, sshConfig }`
 
 ### Docker proxy constraint

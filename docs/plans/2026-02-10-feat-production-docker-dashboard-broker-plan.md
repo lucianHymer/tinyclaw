@@ -8,13 +8,13 @@ date: 2026-02-10
 
 ## Overview
 
-Containerize TinyClaw with a 3-service Docker Compose stack (bot, credential broker, monitoring dashboard), replacing the current bare-metal PID/systemd deployment. The dashboard provides 7 real-time views for observability and debugging. The credential broker isolates GitHub App PEM from the agent process, minting scoped short-lived tokens on demand.
+Containerize Borg with a 3-service Docker Compose stack (bot, credential broker, monitoring dashboard), replacing the current bare-metal PID/systemd deployment. The dashboard provides 7 real-time views for observability and debugging. The credential broker isolates GitHub App PEM from the agent process, minting scoped short-lived tokens on demand.
 
 **Source spec**: `docs/dashboard-spec.md`
 
 ## Problem Statement
 
-TinyClaw currently runs as two bare-metal Node.js processes managed by PID files and optional systemd units. This creates several production pain points:
+Borg currently runs as two bare-metal Node.js processes managed by PID files and optional systemd units. This creates several production pain points:
 
 1. **No isolation** — agent runs with full host filesystem access and the user's shell environment
 2. **No observability** — debugging requires SSH + manual log tailing
@@ -37,7 +37,7 @@ Three Docker containers on a bridge network with a shared data volume:
 │  │  tokens        │  │                │  │  :3100              │ │
 │  └────────────────┘  └────────────────┘  └─────────────────────┘ │
 │         ▲                 │ volume             ▲ volume (ro)      │
-│     /secrets/             └──── .tinyclaw/ ────┘                  │
+│     /secrets/             └──── .borg/ ────┘                  │
 │   (broker only)                (shared)                           │
 └──────────────────────────────────────────────────────────────────┘
                                                     │
@@ -58,14 +58,14 @@ Three Docker containers on a bridge network with a shared data volume:
 ```yaml
 # docker-compose.yml (bot service)
 volumes:
-  - tinyclaw-data:/app/.tinyclaw
+  - borg-data:/app/.borg
   - ${WORKSPACE_ROOT:-/home/clawcian/.openclaw/workspace}:/workspace
 ```
 
-- Agent's `cwd` defaults to `/workspace` (or `/workspace/tinyclaw`)
+- Agent's `cwd` defaults to `/workspace` (or `/workspace/borg`)
 - Hardcoded paths in `session-manager.ts` replaced with `DEFAULT_CWD` env var
 - Trade-off: less isolation, but the agent's purpose IS to read/write code
-- `.tinyclaw/` stays on a named volume (shared with dashboard)
+- `.borg/` stays on a named volume (shared with dashboard)
 
 #### AD-2: Signal propagation in entrypoint
 
@@ -156,7 +156,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
   - Affects: `src/queue-processor.ts` (startup section, ~line 58-64)
 - [ ] **Create `Dockerfile`** (bot container)
   - Base: `node:22-slim`
-  - `WORKDIR /app` (critical — `__dirname` resolves to `/app/dist`, `..` gives `/app`, so `.tinyclaw/` mounts at `/app/.tinyclaw`)
+  - `WORKDIR /app` (critical — `__dirname` resolves to `/app/dist`, `..` gives `/app`, so `.borg/` mounts at `/app/.borg`)
   - Install: `git`, `gh` (GitHub CLI), `curl`, `jq`, `bash`
   - COPY: `package*.json`, `tsconfig.json`, `src/`, `.claude/` (hooks)
   - RUN: `npm ci && npm run build` (needs devDependencies for `tsc`, then prune)
@@ -164,12 +164,12 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 - [ ] **Create `entrypoint.sh`** with signal trapping (AD-2)
 - [ ] **Create `docker-compose.yml`** with bot service only (broker + dashboard added in later phases)
   - Environment: `ANTHROPIC_API_KEY`, `NODE_ENV=production`, `DEFAULT_CWD=/workspace`, `CREDENTIAL_BROKER_URL`
-  - Volumes: `tinyclaw-data:/app/.tinyclaw`, workspace bind mount, `./secrets/github-installations.json:/secrets/github-installations.json:ro`
+  - Volumes: `borg-data:/app/.borg`, workspace bind mount, `./secrets/github-installations.json:/secrets/github-installations.json:ro`
 - [ ] **Create `.env.example`** documenting all required environment variables
   - `ANTHROPIC_API_KEY`, `GITHUB_APP_ID`, `WORKSPACE_ROOT`, `TUNNEL_TOKEN`
-  - Bot token and chat ID remain in `.tinyclaw/settings.json` (loaded at runtime from the volume)
+  - Bot token and chat ID remain in `.borg/settings.json` (loaded at runtime from the volume)
   - GitHub installation IDs live in `secrets/github-installations.json` (org → ID mapping)
-- [ ] **Create `.dockerignore`**: `node_modules`, `dist`, `.tinyclaw`, `secrets`, `.env`, `*.log`
+- [ ] **Create `.dockerignore`**: `node_modules`, `dist`, `.borg`, `secrets`, `.env`, `*.log`
 - [ ] **Test**: `docker compose up` starts bot, processes a Telegram message, response appears
 
 **Success criteria**: Bot container processes messages identically to bare-metal. `docker compose down` triggers graceful shutdown (threads.json saved).
@@ -202,16 +202,16 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 
 #### Phase 3: Monitoring Dashboard — Backend
 
-**Goal**: Express server with all API endpoints, SSE streams, reading `.tinyclaw/` data.
+**Goal**: Express server with all API endpoints, SSE streams, reading `.borg/` data.
 
 **Tasks**:
 
 - [ ] **Add prompt logging** to `src/queue-processor.ts` (~line 395, after prompt assembly)
-  - Log to `.tinyclaw/logs/prompts.jsonl` via `appendFileSync`
+  - Log to `.borg/logs/prompts.jsonl` via `appendFileSync`
   - Fields: `timestamp`, `threadId`, `messageId`, `model`, `systemPromptAppend` (the thread-specific part), `userMessage` (first 500 chars), `historyInjected`, `historyLines`, `promptLength`
   - Add 10MB rotation (same pattern as `message-history.ts`)
   - Affects: `src/queue-processor.ts`
-- [ ] **Reconcile routing log path**: code writes to `.tinyclaw/logs/routing.jsonl`, dashboard expects the same. Verify `routing-logger.ts` path matches.
+- [ ] **Reconcile routing log path**: code writes to `.borg/logs/routing.jsonl`, dashboard expects the same. Verify `routing-logger.ts` path matches.
 - [ ] **Create `src/dashboard.ts`** — Express server with these endpoints:
   - `GET /` — serves `static/dashboard.html`
   - `GET /api/status` — service health, queue depth, thread summary, host metrics
@@ -233,7 +233,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
   - `/host/proc/meminfo` → total, used, available RAM
   - `/host/proc/stat` → CPU percentage (diff two readings 1s apart)
   - `/host/proc/loadavg` → 1m, 5m, 15m
-  - `fs.statfs()` → disk usage of `.tinyclaw/` volume
+  - `fs.statfs()` → disk usage of `.borg/` volume
 - [ ] **Add `express` + `@types/express`** to `package.json` (express as dependency, types as devDependency)
 - [ ] **Test**: `curl localhost:3100/api/status` returns valid JSON with queue depth and thread list
 
@@ -265,7 +265,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 
 #### Phase 5: Docker Compose Integration + Infrastructure
 
-**Goal**: All 3 services running together, systemd unit, tinyclaw.sh rewrite, Cloudflare Tunnel.
+**Goal**: All 3 services running together, systemd unit, borg.sh rewrite, Cloudflare Tunnel.
 
 **Tasks**:
 
@@ -275,7 +275,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
   - CMD: `node dist/dashboard.js`
   - EXPOSE: 3100
 - [ ] **Add dashboard service** to `docker-compose.yml`:
-  - Volumes: `tinyclaw-data:/app/.tinyclaw:ro`, `/proc:/host/proc:ro`
+  - Volumes: `borg-data:/app/.borg:ro`, `/proc:/host/proc:ro`
   - Ports: `127.0.0.1:3100:3100` (localhost only)
   - `depends_on: bot`
 - [ ] **Add cloudflared service** to `docker-compose.yml`:
@@ -285,10 +285,10 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
   - Network: `internal`
   - `depends_on: dashboard`
 - [ ] **Replace systemd files**:
-  - Delete `systemd/tinyclaw-telegram.service`
-  - Delete `systemd/tinyclaw-queue.service`
-  - Create `systemd/tinyclaw.service` — single unit running `docker compose up`
-- [ ] **Rewrite `tinyclaw.sh`** as docker compose wrapper:
+  - Delete `systemd/borg-telegram.service`
+  - Delete `systemd/borg-queue.service`
+  - Create `systemd/borg.service` — single unit running `docker compose up`
+- [ ] **Rewrite `borg.sh`** as docker compose wrapper:
   - `start` → `docker compose up -d`
   - `stop` → `docker compose down`
   - `restart` → `docker compose restart`
@@ -296,9 +296,9 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
   - `logs [service]` → `docker compose logs -f [service]`
   - `install` → install systemd unit with path substitution
   - `send <msg>` → write JSON to queue (same as now, but target the volume)
-  - `migrate` → copy host `.tinyclaw/` into Docker volume (one-time migration)
-- [ ] **Create data migration command** (`tinyclaw.sh migrate`):
-  - Copy `.tinyclaw/threads.json`, `message-history.jsonl`, `settings.json`, `message-models.json` into the Docker volume
+  - `migrate` → copy host `.borg/` into Docker volume (one-time migration)
+- [ ] **Create data migration command** (`borg.sh migrate`):
+  - Copy `.borg/threads.json`, `message-history.jsonl`, `settings.json`, `message-models.json` into the Docker volume
   - Clear `sessionId` from migrated `threads.json` (sessions won't survive container boundary)
 - [ ] **Test full stack**: `docker compose up -d` starts all 4 services, message processing works, dashboard accessible at `localhost:3100`
 
@@ -319,8 +319,8 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 - [ ] Dashboard Prompt Inspector shows assembled prompts with length tracking
 - [ ] Dashboard System Metrics shows CPU, RAM, disk, load average
 - [ ] Dashboard Logs view streams telegram and queue logs in real-time
-- [ ] `tinyclaw.sh` commands all work as docker compose wrappers
-- [ ] `tinyclaw.sh migrate` successfully migrates existing state to Docker volume
+- [ ] `borg.sh` commands all work as docker compose wrappers
+- [ ] `borg.sh migrate` successfully migrates existing state to Docker volume
 - [ ] Cloudflare Tunnel provides HTTPS access to dashboard with Access authentication
 
 ### Non-Functional Requirements
@@ -374,7 +374,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 | `Dockerfile.dashboard` | Dashboard container |
 | `docker-compose.yml` | All 4 services (broker, bot, dashboard, cloudflared) |
 | `entrypoint.sh` | Bot container entrypoint with signal trapping |
-| `.dockerignore` | Exclude node_modules, dist, .tinyclaw, secrets, .env |
+| `.dockerignore` | Exclude node_modules, dist, .borg, secrets, .env |
 | `.env.example` | Document all required environment variables |
 | `broker/index.js` | Credential broker Express server |
 | `broker/package.json` | Broker dependencies (express, @octokit/auth-app) |
@@ -382,7 +382,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 | `docker/github-token-helper.sh` | Git credential helper that calls broker |
 | `src/dashboard.ts` | Dashboard Express server with API + SSE endpoints |
 | `static/dashboard.html` | Dashboard frontend (single file, inline CSS/JS) |
-| `systemd/tinyclaw.service` | Single systemd unit for docker compose |
+| `systemd/borg.service` | Single systemd unit for docker compose |
 | `secrets/.gitkeep` | Placeholder for PEM + installations JSON |
 | `secrets/github-installations.json.example` | Example org → installation ID mapping |
 
@@ -390,20 +390,20 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 
 | File | Change |
 |---|---|
-| `src/queue-processor.ts` | Add prompt logging to `.tinyclaw/logs/prompts.jsonl` (~line 395) |
+| `src/queue-processor.ts` | Add prompt logging to `.borg/logs/prompts.jsonl` (~line 395) |
 | `src/session-manager.ts` | Replace hardcoded paths (lines 63, 215) with `process.env.DEFAULT_CWD` |
 | `src/queue-processor.ts` | Replace hardcoded path (line 368) with `process.env.DEFAULT_CWD` |
 | `src/queue-processor.ts` | Add startup recovery: move `processing/` files back to `incoming/` |
 | `package.json` | Add `express` + `@types/express` dependencies, add `dashboard` script |
-| `tinyclaw.sh` | Full rewrite as docker compose wrapper |
+| `borg.sh` | Full rewrite as docker compose wrapper |
 | `.gitignore` | Add `secrets/`, `.env`, ignore Docker build artifacts |
 
 ## Files to Delete
 
 | File | Reason |
 |---|---|
-| `systemd/tinyclaw-telegram.service` | Replaced by single `systemd/tinyclaw.service` |
-| `systemd/tinyclaw-queue.service` | Replaced by single `systemd/tinyclaw.service` |
+| `systemd/borg-telegram.service` | Replaced by single `systemd/borg.service` |
+| `systemd/borg-queue.service` | Replaced by single `systemd/borg.service` |
 
 ## Open Questions
 
@@ -418,7 +418,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 
 1. **What additional binaries does the bot container need?** The Claude Agent SDK's `query()` runs as a Node.js function, but the agent's Bash tool executes arbitrary shell commands. The plan includes `git`, `gh`, `curl`, `jq`, `bash`. Should it also include `python3`, `ripgrep`, or other developer tools the agent might invoke? **Default: start minimal, add tools if agent errors on missing binaries.**
 
-2. **Should `settings.json` secrets move to env vars?** Currently `telegram_bot_token` and `telegram_chat_id` live in `.tinyclaw/settings.json` on the shared volume. The dashboard container mounts this volume read-only and could theoretically read the bot token. Options: (a) keep as-is, accept the risk since dashboard is trusted code, (b) move token/chat ID to env vars and strip from settings.json. **Default: keep as-is for now, the dashboard is our own code.**
+2. **Should `settings.json` secrets move to env vars?** Currently `telegram_bot_token` and `telegram_chat_id` live in `.borg/settings.json` on the shared volume. The dashboard container mounts this volume read-only and could theoretically read the bot token. Options: (a) keep as-is, accept the risk since dashboard is trusted code, (b) move token/chat ID to env vars and strip from settings.json. **Default: keep as-is for now, the dashboard is our own code.**
 
 3. **Static file path in dashboard container.** `src/dashboard.ts` serves `static/dashboard.html`. Inside Docker, this needs `COPY static/ /app/static/` in the Dockerfile. The path resolution (`path.resolve(__dirname, "../static")`) depends on WORKDIR. **Default: add COPY + verify path in Dockerfile.**
 
@@ -428,7 +428,7 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 
 - **Container health endpoints**: Add `/health` to bot processes (HTTP server on internal port) for proper `depends_on: condition: service_healthy`
 - **Alerting**: Dashboard currently only displays — add webhook/Telegram alerts for disk >90%, dead-letter accumulation, container restarts
-- **Multi-host**: If TinyClaw grows beyond one server, the file-based queue becomes the bottleneck — consider Redis or SQLite
+- **Multi-host**: If Borg grows beyond one server, the file-based queue becomes the bottleneck — consider Redis or SQLite
 - **Dashboard authentication**: Currently relies entirely on Cloudflare Access — could add JWT validation of `Cf-Access-Jwt-Assertion` header for defense in depth
 - **Log rotation**: Add rotation for `telegram.log`, `queue.log`, `routing.jsonl`, `prompts.jsonl` (currently only `message-history.jsonl` rotates at 10MB)
 - **Metrics history**: Dashboard only shows current state — could persist metrics to a time-series file for historical graphs
@@ -442,14 +442,14 @@ The dashboard TypeScript source lives in `src/dashboard.ts` and compiles with th
 - Session manager (hardcoded paths): `src/session-manager.ts:63`, `src/session-manager.ts:215`
 - Routing logger: `src/routing-logger.ts`
 - Message history (rotation logic): `src/message-history.ts:42-44`
-- Current tinyclaw.sh: `tinyclaw.sh` (357 lines, PID management)
-- Current systemd files: `systemd/tinyclaw-telegram.service`, `systemd/tinyclaw-queue.service`
+- Current borg.sh: `borg.sh` (357 lines, PID management)
+- Current systemd files: `systemd/borg-telegram.service`, `systemd/borg-queue.service`
 
 ### Institutional Learnings
 
 - SDK v2 silently ignores mcpServers: `docs/solutions/integration-issues/sdk-v2-mcpservers-silent-ignore.md`
-- First live run fixes (6 issues): `docs/solutions/integration-issues/tinyclaw-v2-first-live-run-fixes.md`
-- Architecture evolution lessons: `docs/solutions/integration-issues/tinyclaw-v2-evolution-from-fork-to-forum-agent.md`
+- First live run fixes (6 issues): `docs/solutions/integration-issues/borg-v2-first-live-run-fixes.md`
+- Architecture evolution lessons: `docs/solutions/integration-issues/borg-v2-evolution-from-fork-to-forum-agent.md`
 
 ### Key Insights from Learnings
 

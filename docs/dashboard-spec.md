@@ -1,8 +1,8 @@
-# TinyClaw Production Architecture — Handoff Spec
+# Borg Production Architecture — Handoff Spec
 
 ## Context
 
-TinyClaw is a Telegram forum-based multi-session Claude agent. It consists of two Node.js processes (telegram-client and queue-processor) that communicate via a file-based queue. It's being deployed to a Hetzner Ubuntu server.
+Borg is a Telegram forum-based multi-session Claude agent. It consists of two Node.js processes (telegram-client and queue-processor) that communicate via a file-based queue. It's being deployed to a Hetzner Ubuntu server.
 
 This doc covers three things that should be implemented together:
 
@@ -13,10 +13,10 @@ This doc covers three things that should be implemented together:
 ### Current State (what exists now)
 
 - Two Node.js processes: `telegram-client.ts` and `queue-processor.ts`
-- File-based queue system in `.tinyclaw/` (JSONL logs, JSON configs, queue directories)
+- File-based queue system in `.borg/` (JSONL logs, JSON configs, queue directories)
 - Smart routing engine (14-dimension scoring → haiku/sonnet/opus model selection)
 - Cross-thread messaging via file queue
-- **Recently added**: systemd service templates in `systemd/` and PID-based process management in `tinyclaw.sh` — these should be **replaced** by Docker-based process management. The systemd templates (`systemd/tinyclaw-telegram.service`, `systemd/tinyclaw-queue.service`) and the PID tracking in `tinyclaw.sh` were a stepping stone. Replace them with a single systemd unit that runs `docker compose up`, and rewrite `tinyclaw.sh` as a thin wrapper around `docker compose` commands.
+- **Recently added**: systemd service templates in `systemd/` and PID-based process management in `borg.sh` — these should be **replaced** by Docker-based process management. The systemd templates (`systemd/borg-telegram.service`, `systemd/borg-queue.service`) and the PID tracking in `borg.sh` were a stepping stone. Replace them with a single systemd unit that runs `docker compose up`, and rewrite `borg.sh` as a thin wrapper around `docker compose` commands.
 
 ---
 
@@ -33,12 +33,12 @@ This doc covers three things that should be implemented together:
 │  │                │  │                │  │                     │ │
 │  │  Holds PEM     │  │  telegram-     │  │  Express + SSE      │ │
 │  │  Mints GitHub  │◀─│  client.js     │  │  Single HTML page   │ │
-│  │  tokens        │  │  queue-        │  │  Reads .tinyclaw/   │─│──▶ Cloudflare Tunnel
+│  │  tokens        │  │  queue-        │  │  Reads .borg/   │─│──▶ Cloudflare Tunnel
 │  │                │  │  processor.js  │  │  Reads /host/proc   │ │     (HTTPS + auth)
 │  │  :3000         │  │                │  │  :3100              │ │
 │  └────────────────┘  └────────────────┘  └─────────────────────┘ │
 │         ▲                 │ volume             ▲ volume (ro)      │
-│     /secrets/             └──── .tinyclaw/ ────┘                  │
+│     /secrets/             └──── .borg/ ────┘                  │
 │   (broker only)                (shared)                           │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -64,7 +64,7 @@ services:
       - CREDENTIAL_BROKER_URL=http://broker:3000
       - NODE_ENV=production
     volumes:
-      - tinyclaw-data:/app/.tinyclaw
+      - borg-data:/app/.borg
     networks:
       - internal
     restart: always
@@ -76,7 +76,7 @@ services:
       context: .
       dockerfile: Dockerfile.dashboard
     volumes:
-      - tinyclaw-data:/app/.tinyclaw:ro
+      - borg-data:/app/.borg:ro
       - /proc:/host/proc:ro
     networks:
       - internal
@@ -87,7 +87,7 @@ services:
       - bot
 
 volumes:
-  tinyclaw-data:
+  borg-data:
 
 networks:
   internal:
@@ -118,9 +118,9 @@ exit 1  # Docker restart: always will restart the container
 One unit file to manage docker compose:
 
 ```ini
-# /etc/systemd/system/tinyclaw.service
+# /etc/systemd/system/borg.service
 [Unit]
-Description=TinyClaw (Docker Compose)
+Description=Borg (Docker Compose)
 After=docker.service
 Requires=docker.service
 
@@ -136,18 +136,18 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-### tinyclaw.sh Rewrite
+### borg.sh Rewrite
 
-Rewrite `tinyclaw.sh` to wrap docker compose. The key commands:
+Rewrite `borg.sh` to wrap docker compose. The key commands:
 
 ```
-./tinyclaw.sh start    → docker compose up -d
-./tinyclaw.sh stop     → docker compose down
-./tinyclaw.sh restart  → docker compose restart
-./tinyclaw.sh logs     → docker compose logs -f [service]
-./tinyclaw.sh status   → docker compose ps + docker stats --no-stream
-./tinyclaw.sh install  → install the systemd unit file
-./tinyclaw.sh send     → write JSON to .tinyclaw/queue/incoming/ (same as now)
+./borg.sh start    → docker compose up -d
+./borg.sh stop     → docker compose down
+./borg.sh restart  → docker compose restart
+./borg.sh logs     → docker compose logs -f [service]
+./borg.sh status   → docker compose ps + docker stats --no-stream
+./borg.sh install  → install the systemd unit file
+./borg.sh send     → write JSON to .borg/queue/incoming/ (same as now)
 ```
 
 ---
@@ -250,19 +250,19 @@ GH_TOKEN=${TOKEN} gh pr create --title "..." --body "..."
 
 ### What to Build
 
-A lightweight web dashboard for monitoring and debugging TinyClaw in production. Dev tools panel, not a marketing page. Prioritize utility and raw detail over polish.
+A lightweight web dashboard for monitoring and debugging Borg in production. Dev tools panel, not a marketing page. Prioritize utility and raw detail over polish.
 
 ### Tech Stack
 
 - **Server**: Single Express or Fastify app in TypeScript (`src/dashboard.ts`)
 - **Frontend**: Single HTML file with inline CSS/JS. No build step, no React, no framework. Vanilla JS + `fetch` + `EventSource` for streaming.
-- **Runs in its own Docker container** with read-only access to `.tinyclaw/` volume and `/host/proc`
+- **Runs in its own Docker container** with read-only access to `.borg/` volume and `/host/proc`
 
 ### Security
 
 - Dashboard binds to `localhost:3100` only — never exposed directly
 - **Cloudflare Tunnel**: zero open ports, HTTPS handled by Cloudflare, access controlled via Cloudflare Access (email OTP or GitHub SSO). No certs to manage.
-- Install `cloudflared` on host, create tunnel, point `tinyclaw.yourdomain.com` → `localhost:3100`
+- Install `cloudflared` on host, create tunnel, point `borg.yourdomain.com` → `localhost:3100`
 - Add Cloudflare Access policy: email allowlist or GitHub SSO
 
 ### Pages / Views
@@ -274,14 +274,14 @@ Real-time status at a glance:
 - **Host metrics**: CPU usage, RAM usage/total, disk usage, load average, uptime — read from `/host/proc/stat`, `/host/proc/meminfo`, `/host/proc/loadavg` (these are the **host** metrics, not container metrics, because we mount the host's `/proc` read-only)
 - **Container health**: are bot, broker, dashboard containers running? (check via Docker socket or just process health endpoints)
 - **Queue depth**: count of files in `incoming/`, `processing/`, `outgoing/`
-- **Active threads**: list from `.tinyclaw/threads.json` — name, model, last active, session status
+- **Active threads**: list from `.borg/threads.json` — name, model, last active, session status
 - **Message rate**: messages processed in last 1h/24h (count from `message-history.jsonl`)
 
 #### 2. Live Feed
 
 Server-Sent Events (SSE) stream of activity:
 
-- Tail `.tinyclaw/message-history.jsonl` via `fs.watch` or polling
+- Tail `.borg/message-history.jsonl` via `fs.watch` or polling
 - Each entry: timestamp, direction (in/out), threadId, sender, model, message preview (first 200 chars)
 - Click to expand full message text
 - Color-code by direction and model (haiku/sonnet/opus)
@@ -298,7 +298,7 @@ Click a thread from overview:
 
 Debugging view for the smart routing engine:
 
-- Tail `.tinyclaw/routing-log.jsonl` — 14-dimension scoring breakdown
+- Tail `.borg/routing-log.jsonl` — 14-dimension scoring breakdown
 - For each message: raw input, routing scores, tier decision, effective model, reply-chain upgrade status
 - Sortable/filterable by thread, model tier, time range
 
@@ -306,7 +306,7 @@ Debugging view for the smart routing engine:
 
 This catches issues like unnecessary prompt inflation (e.g., injecting history into every prompt when it should only happen for new sessions).
 
-**Requires a small queue-processor change**: after assembling the full prompt (~line 381-395), log to `.tinyclaw/logs/prompts.jsonl`:
+**Requires a small queue-processor change**: after assembling the full prompt (~line 381-395), log to `.borg/logs/prompts.jsonl`:
 
 ```json
 {
@@ -335,7 +335,7 @@ Real-time host resource monitoring:
 - **RAM**: total, used, available, percentage — parsed from `/host/proc/meminfo`
 - **CPU**: per-core usage, overall percentage — parsed from `/host/proc/stat` (diff two readings 1s apart)
 - **Load average**: 1m, 5m, 15m — from `/host/proc/loadavg`
-- **Disk**: usage of the .tinyclaw volume — `fs.statfs()`
+- **Disk**: usage of the .borg volume — `fs.statfs()`
 - **Process uptime**: how long each container has been running
 
 Implementation note: these read from `/host/proc/*` (the host's proc filesystem mounted into the container), NOT from `/proc` inside the container. This gives real host metrics. Example:
@@ -378,12 +378,12 @@ The dashboard reads these files — it never writes to them:
 
 | File | Format | Contains |
 |------|--------|----------|
-| `.tinyclaw/threads.json` | JSON | Thread configs, session IDs, models |
-| `.tinyclaw/message-history.jsonl` | JSONL | All messages in/out with metadata |
-| `.tinyclaw/routing-log.jsonl` | JSONL | 14-dimension routing scores |
-| `.tinyclaw/logs/prompts.jsonl` | JSONL | Full assembled prompts (NEW — needs queue-processor change) |
-| `.tinyclaw/logs/telegram.log` | Plain text | Telegram client logs |
-| `.tinyclaw/logs/queue.log` | Plain text | Queue processor logs |
+| `.borg/threads.json` | JSON | Thread configs, session IDs, models |
+| `.borg/message-history.jsonl` | JSONL | All messages in/out with metadata |
+| `.borg/routing-log.jsonl` | JSONL | 14-dimension routing scores |
+| `.borg/logs/prompts.jsonl` | JSONL | Full assembled prompts (NEW — needs queue-processor change) |
+| `.borg/logs/telegram.log` | Plain text | Telegram client logs |
+| `.borg/logs/queue.log` | Plain text | Queue processor logs |
 | `/host/proc/meminfo` | Proc filesystem | Host RAM metrics |
 | `/host/proc/stat` | Proc filesystem | Host CPU metrics |
 | `/host/proc/loadavg` | Proc filesystem | Host load average |
@@ -393,7 +393,7 @@ The dashboard reads these files — it never writes to them:
 - Entire frontend: single `dashboard.html` (or `static/dashboard.html`). No npm frontend build.
 - Use `fs.watch` or poll every 1-2s for file changes to power SSE streams.
 - For JSONL files: track file byte position, only read new lines (don't re-read entire file).
-- Read-only. Dashboard never modifies TinyClaw state.
+- Read-only. Dashboard never modifies Borg state.
 - Prompt inspector requires the queue-processor logging change described above.
 - Host metrics come from `/host/proc/*` (mounted read-only from host), not container's own `/proc`.
 
@@ -405,9 +405,9 @@ The dashboard reads these files — it never writes to them:
 
 | File | Action | Notes |
 |------|--------|-------|
-| `systemd/tinyclaw-telegram.service` | Replace | Becomes single `systemd/tinyclaw.service` for docker compose |
-| `systemd/tinyclaw-queue.service` | Delete | No longer needed |
-| `tinyclaw.sh` | Rewrite | Wrap docker compose commands instead of PID management |
+| `systemd/borg-telegram.service` | Replace | Becomes single `systemd/borg.service` for docker compose |
+| `systemd/borg-queue.service` | Delete | No longer needed |
+| `borg.sh` | Rewrite | Wrap docker compose commands instead of PID management |
 
 ### Add
 
@@ -420,7 +420,7 @@ The dashboard reads these files — it never writes to them:
 | `broker/` | Credential broker (index.js, package.json, Dockerfile) |
 | `src/dashboard.ts` | Dashboard server |
 | `static/dashboard.html` | Dashboard frontend (single file) |
-| `systemd/tinyclaw.service` | Single systemd unit for docker compose |
+| `systemd/borg.service` | Single systemd unit for docker compose |
 
 ### Keep As-Is
 
@@ -442,8 +442,8 @@ The dashboard reads these files — it never writes to them:
 3. Create `.env` with `GITHUB_APP_ID=...`
 4. Place PEM at `./secrets/github-app.pem`
 5. `docker compose up -d`
-6. Install systemd unit: `./tinyclaw.sh install`
+6. Install systemd unit: `./borg.sh install`
 7. Install `cloudflared`, create tunnel → `localhost:3100`
 8. Add Cloudflare Access policy (email allowlist or GitHub SSO)
 9. Set up GitHub branch protection on all repos
-10. Verify: dashboard accessible at `https://tinyclaw.yourdomain.com`
+10. Verify: dashboard accessible at `https://borg.yourdomain.com`

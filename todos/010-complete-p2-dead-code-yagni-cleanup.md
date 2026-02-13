@@ -24,8 +24,8 @@ Multiple dead code artifacts and YAGNI violations exist from rapid architectural
 5. `queueInterval` in `src/queue-processor.ts:706` -- assigned but never cleared in shutdown handler
 
 **Orphaned files**:
-6. `systemd/tinyclaw-telegram.service` -- replaced by `systemd/tinyclaw.service`
-7. `systemd/tinyclaw-queue.service` -- replaced by `systemd/tinyclaw.service`
+6. `systemd/borg-telegram.service` -- replaced by `systemd/borg.service`
+7. `systemd/borg-queue.service` -- replaced by `systemd/borg.service`
 8. `setup-wizard.sh` -- orphaned after Docker migration
 
 **Orphaned dependency**:
@@ -53,7 +53,7 @@ Multiple dead code artifacts and YAGNI violations exist from rapid architectural
 - `src/queue-processor.ts` (clear queueInterval in shutdown)
 - `src/telegram-client.ts` (remove MyContext alias)
 - `package.json` (remove @grammyjs/auto-chat-action)
-- Delete: `systemd/tinyclaw-telegram.service`, `systemd/tinyclaw-queue.service`, `setup-wizard.sh`
+- Delete: `systemd/borg-telegram.service`, `systemd/borg-queue.service`, `setup-wizard.sh`
 
 ## Acceptance Criteria
 

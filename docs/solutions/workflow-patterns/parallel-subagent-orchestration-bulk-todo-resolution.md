@@ -36,7 +36,7 @@ shared_file_conflicts: "docker-compose.yml touched by 4 agents across phases"
 
 ## Problem Statement
 
-Resolving 10 code review TODOs across a multi-component Telegram agent system (TinyClaw) required a coordinated parallel execution strategy to maximize throughput while avoiding file conflicts. The TODOs spanned P1 critical issues (dashboard API mismatches, signal race conditions, missing authentication, non-atomic writes) and P2 improvements (resource limits, healthchecks, dead code, cache invalidation). The core challenge was orchestrating multiple subagents to edit overlapping files -- particularly `docker-compose.yml`, touched by four separate agents -- without merge conflicts, while respecting inter-TODO dependencies such as the credential helper (012) requiring the broker authentication changes from (003). A two-phase dependency graph with conflict-aware partitioning enabled all 10 TODOs to be resolved in parallel batches, producing 26 changed files with a clean build and zero conflicts.
+Resolving 10 code review TODOs across a multi-component Telegram agent system (Borg) required a coordinated parallel execution strategy to maximize throughput while avoiding file conflicts. The TODOs spanned P1 critical issues (dashboard API mismatches, signal race conditions, missing authentication, non-atomic writes) and P2 improvements (resource limits, healthchecks, dead code, cache invalidation). The core challenge was orchestrating multiple subagents to edit overlapping files -- particularly `docker-compose.yml`, touched by four separate agents -- without merge conflicts, while respecting inter-TODO dependencies such as the credential helper (012) requiring the broker authentication changes from (003). A two-phase dependency graph with conflict-aware partitioning enabled all 10 TODOs to be resolved in parallel batches, producing 26 changed files with a clean build and zero conflicts.
 
 ## Solution
 
@@ -188,8 +188,8 @@ The 10 TODOs share a common origin: rapid architectural pivots (WhatsApp to Disc
 
 ## Related Documentation
 
-- `docs/solutions/integration-issues/tinyclaw-v2-evolution-from-fork-to-forum-agent.md` -- Architecture evolution and cross-thread orchestration
+- `docs/solutions/integration-issues/borg-v2-evolution-from-fork-to-forum-agent.md` -- Architecture evolution and cross-thread orchestration
 - `docs/solutions/integration-issues/sdk-v2-mcpservers-silent-ignore.md` -- SDK v1 vs v2 MCP support
-- `docs/solutions/integration-issues/tinyclaw-v2-first-live-run-fixes.md` -- First deployment fixes
+- `docs/solutions/integration-issues/borg-v2-first-live-run-fixes.md` -- First deployment fixes
 - `docs/plans/2026-02-10-feat-production-docker-dashboard-broker-plan.md` -- Plan that generated these TODOs
 - `docs/plans/2026-02-10-feat-agent-sdk-v2-smart-routing-upgrade-plan.md` -- Routing and session architecture
