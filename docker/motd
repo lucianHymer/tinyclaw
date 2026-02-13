@@ -24,5 +24,6 @@ printf '\033[1;36m  ── tmux ────────────────
 printf '\033[36m  You are inside a tmux session right now\033[0m\n'
 printf '\033[36m  \033[1;97mOption + drag\033[0;36m       select & copy text (native highlight)\033[0m\n'
 printf '\033[36m  \033[1;97mRight-click\033[0;36m         actions menu (split, fullscreen, detach)\033[0m\n'
+printf '\033[36m  \033[1;97mShift + right-click\033[0;36m actions menu (always works, even in apps)\033[0m\n'
 printf '\033[36m  \033[1;97mCtrl+b  d\033[0;36m           detach session (it stays alive)\033[0m\n'
 printf '\n'
