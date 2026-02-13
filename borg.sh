@@ -37,7 +37,7 @@ log() {
 
 # Run docker compose with the correct project directory
 dc() {
-    docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
+    docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" -p "$COMPOSE_PROJECT" "$@"
 }
 
 # Get the host mount point of the borg-data volume
