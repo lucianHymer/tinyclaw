@@ -10,7 +10,7 @@ dependencies: []
 
 ## Problem Statement
 
-`session-manager.ts` caches settings in memory on first read and never invalidates. Changes to `settings.json` (e.g., `tinyclaw.sh model sonnet`) are not reflected until process restart. The `tinyclaw.sh model` command's comment "Changes take effect on next message" is incorrect.
+`session-manager.ts` caches settings in memory on first read and never invalidates. Changes to `settings.json` (e.g., `borg.sh model sonnet`) are not reflected until process restart. The `borg.sh model` command's comment "Changes take effect on next message" is incorrect.
 
 ## Findings
 
@@ -50,7 +50,7 @@ Settings that change at runtime (model, timezone) become env vars. Requires cont
 
 ## Acceptance Criteria
 
-- [ ] `tinyclaw.sh model sonnet` takes effect on next message without restart
+- [ ] `borg.sh model sonnet` takes effect on next message without restart
 - [ ] Settings file re-read when mtime changes
 
 ## Work Log

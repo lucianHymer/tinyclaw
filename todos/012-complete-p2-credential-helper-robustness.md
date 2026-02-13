@@ -16,7 +16,7 @@ dependencies: ["003"]
 
 **Source**: pattern-recognition-specialist agent
 
-1. **No `set -euo pipefail`** -- `tinyclaw.sh` uses it (line 5), but the credential helper does not. If `ORG` is never set (no `path=` in stdin), `jq` receives an empty string instead of failing early.
+1. **No `set -euo pipefail`** -- `borg.sh` uses it (line 5), but the credential helper does not. If `ORG` is never set (no `path=` in stdin), `jq` receives an empty string instead of failing early.
 
 2. **No curl timeout** -- `curl -sf` will hang until TCP timeout (~120s) if the broker is unresponsive. Git operations appear frozen.
 

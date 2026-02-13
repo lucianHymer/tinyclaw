@@ -30,7 +30,7 @@ services:
       broker:
         condition: service_healthy
     volumes:
-      - ./.tinyclaw:/app/.tinyclaw
+      - ./.borg:/app/.borg
       # Mount workspace at the same host path so threads.json cwd values work
       - ${WORKSPACE_ROOT}:${WORKSPACE_ROOT}
       - ./secrets/github-installations.json:/secrets/github-installations.json:ro
@@ -43,7 +43,7 @@ services:
       - CREDENTIAL_BROKER_URL=http://broker:3000
       - BROKER_SECRET=${BROKER_SECRET}
       - PUBLIC_HOST=${PUBLIC_HOST}
-      - DEV_NETWORK=tinyclaw_dev
+      - DEV_NETWORK=borg_dev
       - DOCKER_PROXY_URL=http://docker-proxy:2375/v1.47
     networks:
       - internal
@@ -90,12 +90,12 @@ services:
       docker-proxy:
         condition: service_healthy
     volumes:
-      - ./.tinyclaw:/app/.tinyclaw:ro
+      - ./.borg:/app/.borg:ro
     ports:
       - "127.0.0.1:3100:3100"
     environment:
       - DOCKER_PROXY_URL=http://docker-proxy:2375/v1.47
-      - COMPOSE_PROJECT=${COMPOSE_PROJECT_NAME:-tinyclaw}
+      - COMPOSE_PROJECT=${COMPOSE_PROJECT_NAME:-borg}
     networks:
       - internal
     healthcheck:

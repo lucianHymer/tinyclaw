@@ -1,4 +1,4 @@
-# Getting Started with TinyClaw
+# Getting Started with Borg
 
 ## Two Ways to Work
 

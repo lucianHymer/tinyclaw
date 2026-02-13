@@ -1,7 +1,7 @@
 {
-  "name": "tinyclaw",
+  "name": "borg",
   "version": "2.0.0",
-  "description": "TinyClaw - Telegram forum-based multi-session Claude agent with SDK v2 and smart routing",
+  "description": "Borg - Telegram forum-based multi-session Claude agent with SDK v2 and smart routing",
   "main": "dist/telegram-client.js",
   "scripts": {
     "build": "tsc",

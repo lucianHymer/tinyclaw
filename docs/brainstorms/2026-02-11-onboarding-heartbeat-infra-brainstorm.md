@@ -8,7 +8,7 @@
 
 ## What We're Building
 
-Three interconnected capabilities to turn TinyClaw into a team adoption platform:
+Three interconnected capabilities to turn Borg into a team adoption platform:
 
 ### 1. Smart Heartbeat System
 
@@ -61,9 +61,9 @@ Give each developer their own Docker container on the existing Hetzner instance 
 **Architecture:**
 ```
 Hetzner Box (32GB RAM upgrade)
-├── TinyClaw Stack (existing docker-compose)
+├── Borg Stack (existing docker-compose)
 │   ├── broker (credential broker - GitHub App tokens)
-│   ├── bot (TinyClaw Telegram bot + queue processor)
+│   ├── bot (Borg Telegram bot + queue processor)
 │   └── dashboard
 ├── Dev Container: alice (SSH on port 2201)
 │   ├── Claude Code CLI (pre-installed)
@@ -99,7 +99,7 @@ Hetzner Box (32GB RAM upgrade)
 
 ### 4. Live Memory Rebalancing Dashboard
 
-A new page on the existing TinyClaw dashboard that shows real-time memory usage per container and lets you rebalance limits on the fly.
+A new page on the existing Borg dashboard that shows real-time memory usage per container and lets you rebalance limits on the fly.
 
 **What it shows:**
 - Host total RAM and current usage
@@ -116,7 +116,7 @@ A new page on the existing TinyClaw dashboard that shows real-time memory usage 
 - The dashboard container needs access to the Docker socket (`/var/run/docker.sock`) to read container stats and run `docker update`
 - Uses the Docker Engine API: `GET /containers/{id}/stats` for live usage, `POST /containers/{id}/update` for limit changes
 - The existing dashboard already reads host metrics from `/proc` -- this extends that pattern
-- Notification to Telegram goes through the existing queue system (write JSON to `.tinyclaw/queue/incoming/` targeting the general thread)
+- Notification to Telegram goes through the existing queue system (write JSON to `.borg/queue/incoming/` targeting the general thread)
 
 ---
 
@@ -128,7 +128,7 @@ A new page on the existing TinyClaw dashboard that shows real-time memory usage 
 
 **Shared box over individual instances:** At 5-10 devs, a single 32GB box ($50/mo) is dramatically cheaper than 10 individual instances ($40-80/mo each). The constraint is concurrent active sessions, but in practice, 3-5 simultaneous sessions is plenty for a team of 10 who are just getting started.
 
-**The Trojan horse effect:** As devs work in these containers on repos that have TinyClaw-enhanced CLAUDE.md files, skills, and memory -- those improvements are in the repo. When they eventually run Claude Code locally on their MacBook, it all just works. The Telegram channel and the dev containers are both teaching and delivery mechanisms.
+**The Trojan horse effect:** As devs work in these containers on repos that have Borg-enhanced CLAUDE.md files, skills, and memory -- those improvements are in the repo. When they eventually run Claude Code locally on their MacBook, it all just works. The Telegram channel and the dev containers are both teaching and delivery mechanisms.
 
 ---
 

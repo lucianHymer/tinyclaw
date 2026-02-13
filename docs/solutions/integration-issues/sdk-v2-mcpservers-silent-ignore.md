@@ -21,7 +21,7 @@ resolution_type: API migration (v2 -> v1 query)
 
 ## Problem
 
-Agents running in Claude Agent SDK sessions could not see custom MCP tools (`send_message`, `list_threads`) needed for cross-thread communication in TinyClaw's Telegram forum multi-agent system. The agent explicitly said: *"I don't have a built-in tool to send messages across threads."*
+Agents running in Claude Agent SDK sessions could not see custom MCP tools (`send_message`, `list_threads`) needed for cross-thread communication in Borg's Telegram forum multi-agent system. The agent explicitly said: *"I don't have a built-in tool to send messages across threads."*
 
 ## Root Cause
 
@@ -37,7 +37,7 @@ Two distinct issues:
 
 ```typescript
 // Passed McpSdkServerConfigWithInstance via cast — compiled fine, silently ignored
-mcpServers: { tinyclaw: createTinyClawMcpServer(threadId) }
+mcpServers: { borg: createBorgMcpServer(threadId) }
 ```
 
 `McpSdkServerConfigWithInstance` contains a live `McpServer` object that isn't serializable across the process boundary. But even if it were, v2 ignores `mcpServers` entirely.
@@ -46,7 +46,7 @@ mcpServers: { tinyclaw: createTinyClawMcpServer(threadId) }
 
 ```typescript
 // Fully serializable config — still silently ignored
-mcpServers: { tinyclaw: { command: "node", args: ["dist/mcp-server.js"] } }
+mcpServers: { borg: { command: "node", args: ["dist/mcp-server.js"] } }
 ```
 
 Confirmed: v2 doesn't support `mcpServers` in any form.
@@ -74,7 +74,7 @@ const q = query({
         model: effectiveModel,
         cwd: threadConfig.cwd,
         mcpServers: {
-            tinyclaw: createTinyClawMcpServer(threadId),
+            borg: createBorgMcpServer(threadId),
         },
         resume: threadConfig.sessionId,  // session continuity
         settingSources: ["project"],
@@ -96,10 +96,10 @@ No separate process, no `.mcp.json`, thread-aware instances:
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 
-export function createTinyClawMcpServer(sourceThreadId: number) {
+export function createBorgMcpServer(sourceThreadId: number) {
     const sendMessage = tool(
         "send_message",
-        "Send a message to another TinyClaw thread.",
+        "Send a message to another Borg thread.",
         { targetThreadId: z.number(), message: z.string() },
         async ({ targetThreadId, message }) => {
             // Write to BOTH queues (see below)
@@ -107,7 +107,7 @@ export function createTinyClawMcpServer(sourceThreadId: number) {
     );
 
     return createSdkMcpServer({
-        name: "tinyclaw",
+        name: "borg",
         tools: [sendMessage, listThreads],
     });
 }
@@ -160,7 +160,7 @@ Removed `activeSessions` cache. Each message is a self-contained `query()` call.
 
 4. **Cross-thread messaging requires dual-queue writes** — the outgoing queue is for Telegram visibility, the incoming queue is for agent processing. Bot self-filtering makes outgoing-only insufficient.
 
-5. **Factory pattern for thread-aware MCP** — `createTinyClawMcpServer(threadId)` gives each query its own MCP instance with the correct `sourceThreadId`, enabling proper routing.
+5. **Factory pattern for thread-aware MCP** — `createBorgMcpServer(threadId)` gives each query its own MCP instance with the correct `sourceThreadId`, enabling proper routing.
 
 ## Prevention
 
@@ -171,6 +171,6 @@ Removed `activeSessions` cache. Each message is a self-contained `query()` call.
 
 ## Related
 
-- [tinyclaw-v2-evolution-from-fork-to-forum-agent.md](./tinyclaw-v2-evolution-from-fork-to-forum-agent.md) — original v2 migration
-- [tinyclaw-v2-first-live-run-fixes.md](./tinyclaw-v2-first-live-run-fixes.md) — first deployment issues
+- [borg-v2-evolution-from-fork-to-forum-agent.md](./borg-v2-evolution-from-fork-to-forum-agent.md) — original v2 migration
+- [borg-v2-first-live-run-fixes.md](./borg-v2-first-live-run-fixes.md) — first deployment issues
 - SDK types: `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` lines 242 (`createSdkMcpServer`), 670 (`mcpServers` on Options), 1549 (`SDKSessionOptions` — no mcpServers)

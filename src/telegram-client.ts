@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Telegram Client - grammY-based Telegram bot for TinyClaw
+ * Telegram Client - grammY-based Telegram bot for Borg
  * Handles incoming messages, commands, and outgoing queue polling.
  */
 
@@ -22,11 +22,11 @@ import { toErrorMessage } from "./types.js";
 // ─── Constants ───
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
-const QUEUE_INCOMING = path.join(SCRIPT_DIR, ".tinyclaw/queue/incoming");
-const QUEUE_OUTGOING = path.join(SCRIPT_DIR, ".tinyclaw/queue/outgoing");
-const LOG_FILE = path.join(SCRIPT_DIR, ".tinyclaw/logs/telegram.log");
-const MESSAGE_MODELS_FILE = path.join(SCRIPT_DIR, ".tinyclaw/message-models.json");
-const QUEUE_STATUS = path.join(SCRIPT_DIR, ".tinyclaw/status");
+const QUEUE_INCOMING = path.join(SCRIPT_DIR, ".borg/queue/incoming");
+const QUEUE_OUTGOING = path.join(SCRIPT_DIR, ".borg/queue/outgoing");
+const LOG_FILE = path.join(SCRIPT_DIR, ".borg/logs/telegram.log");
+const MESSAGE_MODELS_FILE = path.join(SCRIPT_DIR, ".borg/message-models.json");
+const QUEUE_STATUS = path.join(SCRIPT_DIR, ".borg/status");
 
 // ─── Ensure Directories Exist ───
 
@@ -541,6 +541,6 @@ bot.start({
             { command: "setdir", description: "Set working directory for this thread" },
             { command: "status", description: "Show all active threads and their status" },
         ]);
-        log("INFO", "TinyClaw Telegram bot started");
+        log("INFO", "Borg Telegram bot started");
     },
 });

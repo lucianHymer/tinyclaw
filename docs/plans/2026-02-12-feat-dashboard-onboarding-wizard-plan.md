@@ -255,7 +255,7 @@ interface CreateContainerResult {
 
 ```typescript
 const containerSpec = {
-  Image: "tinyclaw-dev",
+  Image: "borg-dev",
   Hostname: `dev-${name}`,
   Env: [
     `PROVISION_SSH_KEY=${sshPublicKey}`,
@@ -264,11 +264,11 @@ const containerSpec = {
   ],
   ExposedPorts: { "22/tcp": {} },
   Labels: {
-    "tinyclaw.type": "dev-container",
-    "tinyclaw.created-by": "mcp-tool",
-    "tinyclaw.created-at": new Date().toISOString(),
-    "tinyclaw.dev-name": name,
-    "tinyclaw.dev-email": email,
+    "borg.type": "dev-container",
+    "borg.created-by": "mcp-tool",
+    "borg.created-at": new Date().toISOString(),
+    "borg.dev-name": name,
+    "borg.dev-email": email,
   },
   HostConfig: {
     Memory: 2 * 1024 * 1024 * 1024,        // 2GB
@@ -310,11 +310,11 @@ async function stopDevContainer(baseUrl: string, containerId: string): Promise<v
 
 async function deleteDevContainer(baseUrl: string, containerId: string, force?: boolean): Promise<void> {
   // DELETE /containers/{id}?force=true for running containers
-  // Only operates on tinyclaw.type=dev-container (verify via inspect first)
+  // Only operates on borg.type=dev-container (verify via inspect first)
 }
 ```
 
-**Safety check:** Before delete, inspect the container and verify `tinyclaw.type=dev-container` label exists. Refuse to delete containers without this label.
+**Safety check:** Before delete, inspect the container and verify `borg.type=dev-container` label exists. Refuse to delete containers without this label.
 
 #### O(1) Port Scanning + Name Resolution
 
@@ -326,7 +326,7 @@ const containers = await fetchDockerJson<Array<{
   Ports: Array<{ PublicPort?: number }>;
 }>>(
   baseUrl,
-  '/containers/json?all=true&filters={"label":["tinyclaw.type=dev-container"]}',
+  '/containers/json?all=true&filters={"label":["borg.type=dev-container"]}',
 );
 
 const occupied = new Set<number>();
@@ -353,7 +353,7 @@ Presentation utility, separate from Docker client logic:
 function formatSSHConfig(result: CreateContainerResult, keyType?: string): string {
   const identityFile = keyType === "ssh-rsa" ? "~/.ssh/id_rsa" : "~/.ssh/id_ed25519";
   return [
-    `Host tinyclaw-${result.name.replace(/^dev-/, "")}`,
+    `Host borg-${result.name.replace(/^dev-/, "")}`,
     `  HostName ${result.host}`,
     `  Port ${result.port}`,
     `  User dev`,
@@ -456,14 +456,14 @@ const startDevContainerTool = tool(
 ```typescript
 const deleteDevContainerTool = tool(
   "delete_dev_container",
-  "Permanently delete a dev container by name (e.g., 'dev-alice'). This is IRREVERSIBLE — all data inside the container is lost and the port is freed. Stops the container first if running. Only works on containers with the tinyclaw.type=dev-container label. IMPORTANT: Always confirm with the user before calling this tool.",
+  "Permanently delete a dev container by name (e.g., 'dev-alice'). This is IRREVERSIBLE — all data inside the container is lost and the port is freed. Stops the container first if running. Only works on containers with the borg.type=dev-container label. IMPORTANT: Always confirm with the user before calling this tool.",
   {
     name: z.string().describe("Container name (e.g., 'dev-alice')"),
   },
   async ({ name }) => {
     try {
       const container = await findContainerByName(DOCKER_PROXY_URL, name);
-      // Safety: verify tinyclaw.type=dev-container label
+      // Safety: verify borg.type=dev-container label
       await deleteDevContainer(DOCKER_PROXY_URL, container.Id, true);
       return { content: [textContent(`Deleted ${name}. Port ${container.port} is now available.`)] };
     } catch (err) {
@@ -522,7 +522,7 @@ Rules:
 - Accept fields in any order. If someone provides multiple fields in one message, extract them all.
 - After collecting all three, display a summary and ask for confirmation before calling create_dev_container:
   "I'll create your container with: Name: Alice, Email: alice@company.com, SSH key: ed25519. Proceed?"
-- After creation succeeds, share the SSH config block and test command: \`ssh tinyclaw-<name>\`
+- After creation succeeds, share the SSH config block and test command: \`ssh borg-<name>\`
 - After creation, call get_container_stats to verify the container is running.
 - If creation fails, explain the error and suggest next steps.
 - Never echo private keys. Never include SSH key content in confirmation summaries beyond the type (ed25519/rsa).
@@ -559,7 +559,7 @@ bot:
   environment:
     # ...existing...
     - DASHBOARD_HOST=${DASHBOARD_HOST}  # externally reachable hostname for SSH config
-    - DEV_NETWORK=tinyclaw_dev          # Docker network for dev containers
+    - DEV_NETWORK=borg_dev          # Docker network for dev containers
 ```
 
 `DASHBOARD_HOST` is required by `formatSSHConfig()` to produce correct SSH config snippets.
@@ -567,7 +567,7 @@ bot:
 
 ### Phase 5: Integration & Testing
 
-- Rebuild dev container image (`docker build -t tinyclaw-dev -f Dockerfile.dev-container .`)
+- Rebuild dev container image (`docker build -t borg-dev -f Dockerfile.dev-container .`)
 - Restart docker-proxy to pick up new rules
 - Test via master thread Telegram:
   1. "Create a dev container for Alice, email alice@company.com, SSH key: ssh-ed25519 AAAA..."
@@ -584,7 +584,7 @@ bot:
 - Name with shell metacharacters — should be sanitized
 - Verify `no-new-privileges` set on created container
 - Verify `PidsLimit` set on created container
-- Verify delete refuses containers without `tinyclaw.type=dev-container` label
+- Verify delete refuses containers without `borg.type=dev-container` label
 
 ## Acceptance Criteria
 
@@ -598,7 +598,7 @@ bot:
 - [ ] Container appears in Memory dashboard view after creation
 - [ ] Duplicate names handled (auto-increment suffix)
 - [ ] Port auto-assignment from 2201-2299 range
-- [ ] Delete verifies `tinyclaw.type=dev-container` label before removing
+- [ ] Delete verifies `borg.type=dev-container` label before removing
 - [ ] `get_container_stats` includes SSH port numbers in output
 - [ ] System prompt guides agent through onboarding conversation flow
 - [ ] Agent confirms details before creating, warns about GitHub email match
@@ -608,7 +608,7 @@ bot:
 - [ ] Private key paste rejected with explanation (agent does NOT echo key back)
 - [ ] Port range exhaustion returns clear error
 - [ ] Docker API failures return actionable error messages
-- [ ] Image not found: "tinyclaw-dev image not built. Run docker build..."
+- [ ] Image not found: "borg-dev image not built. Run docker build..."
 - [ ] Delete of non-dev container refused
 - [ ] Create-succeeded-but-start-failed distinguished from create-failed (two-phase error)
 - [ ] Agent confirms before create (summary) and before delete (irreversibility warning)
@@ -649,7 +649,7 @@ bot:
 
 ## Dependencies & Prerequisites
 
-- `tinyclaw-dev` Docker image must be pre-built on host
+- `borg-dev` Docker image must be pre-built on host
 - `/secrets/broker-env.sh` must exist on host (CREDENTIAL_BROKER_URL + BROKER_SECRET)
 - `/secrets/github-installations.json` must exist on host
 - `DASHBOARD_HOST` env var configured for bot process

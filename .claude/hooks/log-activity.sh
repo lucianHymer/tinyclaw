@@ -3,7 +3,7 @@
 
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name')
-LOGFILE="$CLAUDE_PROJECT_DIR/.tinyclaw/logs/activity.log"
+LOGFILE="$CLAUDE_PROJECT_DIR/.borg/logs/activity.log"
 
 mkdir -p "$(dirname "$LOGFILE")"
 

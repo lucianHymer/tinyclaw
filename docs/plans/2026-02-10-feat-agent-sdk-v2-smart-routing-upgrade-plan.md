@@ -1,16 +1,16 @@
 ---
-title: "feat: TinyClaw 2: The Pinchening"
+title: "feat: Borg 2: The Pinchening"
 type: feat
 date: 2026-02-10
 ---
 
-# TinyClaw 2: The Pinchening
+# Borg 2: The Pinchening
 
 ### Telegram Forum-Based Multi-Session Agent with SDK v2, Smart Routing, and Cross-Thread Orchestration
 
 ## Overview
 
-Replace TinyClaw's `execSync` CLI wrapper with the Agent SDK v2 session-based API, built around a Telegram forum group where each topic is an independent Claude session with its own working directory. Add the 14-dimension prompt routing engine from anthropic-router, a shared JSONL message history, cross-thread communication via system prompt instructions, and remove both WhatsApp and Discord.
+Replace Borg's `execSync` CLI wrapper with the Agent SDK v2 session-based API, built around a Telegram forum group where each topic is an independent Claude session with its own working directory. Add the 14-dimension prompt routing engine from anthropic-router, a shared JSONL message history, cross-thread communication via system prompt instructions, and remove both WhatsApp and Discord.
 
 ## Architecture
 
@@ -19,7 +19,7 @@ Replace TinyClaw's `execSync` CLI wrapper with the Agent SDK v2 session-based AP
 |         Telegram Forum Group                   |
 |                                                |
 |  +----------+ +----------+ +----------+       |
-|  | General  | | Passport | | TinyClaw |  ...  |
+|  | General  | | Passport | | Borg |  ...  |
 |  | (Master) | |  topic   | |  topic   |       |
 |  | thread:1 | | thread:5 | | thread:9 |       |
 |  +----+-----+ +----+-----+ +----+-----+       |
@@ -114,7 +114,7 @@ One Telegram supergroup with forum/topics enabled. Each topic is an independent 
 
 Each Telegram topic maps to exactly one Claude SDK session. Sessions are independent -- different working directories, different models, different conversation contexts.
 
-**Thread configuration** stored in `.tinyclaw/threads.json`:
+**Thread configuration** stored in `.borg/threads.json`:
 
 ```json
 {
@@ -154,7 +154,7 @@ Replies and fresh messages have different routing semantics:
 
 The `isReply` flag and `replyToModel` are set by the Telegram client and passed through the queue.
 
-**Reply-to-model tracking:** When the Telegram client sends a bot response, it stores `{ telegramMessageId → model }` in `.tinyclaw/message-models.json`. When a reply comes in, it looks up `ctx.msg.reply_to_message.message_id` to get the model that produced it.
+**Reply-to-model tracking:** When the Telegram client sends a bot response, it stores `{ telegramMessageId → model }` in `.borg/message-models.json`. When a reply comes in, it looks up `ctx.msg.reply_to_message.message_id` to get the model that produced it.
 
 ```typescript
 // Telegram client -- on sending response
@@ -209,23 +209,23 @@ Each session gets cross-thread communication instructions in its `systemPrompt.a
 
 **Worker threads:**
 ```
-You are TinyClaw, operating in thread "Passport" (/home/clawcian/.openclaw/workspace/passport).
+You are Borg, operating in thread "Passport" (/home/clawcian/.openclaw/workspace/passport).
 
 Cross-thread communication:
-- Active threads: Read .tinyclaw/threads.json
-- Other threads' history: Grep .tinyclaw/message-history.jsonl for their threadId
-- Message another thread: Write JSON to .tinyclaw/queue/outgoing/ with targetThreadId field
-- If you lose context after compaction: tail .tinyclaw/message-history.jsonl for your threadId
+- Active threads: Read .borg/threads.json
+- Other threads' history: Grep .borg/message-history.jsonl for their threadId
+- Message another thread: Write JSON to .borg/queue/outgoing/ with targetThreadId field
+- If you lose context after compaction: tail .borg/message-history.jsonl for your threadId
 ```
 
 **Master thread (General topic):**
 ```
-You are TinyClaw Master, the coordination thread. You have visibility across all projects.
+You are Borg Master, the coordination thread. You have visibility across all projects.
 
 You can:
-- See all active threads and their status in .tinyclaw/threads.json
-- Read any thread's history from .tinyclaw/message-history.jsonl
-- Message any thread by writing to .tinyclaw/queue/outgoing/ with targetThreadId
+- See all active threads and their status in .borg/threads.json
+- Read any thread's history from .borg/message-history.jsonl
+- Message any thread by writing to .borg/queue/outgoing/ with targetThreadId
 - Create new topics via Telegram (the bot handles createForumTopic)
 - Broadcast to all threads by writing multiple outgoing messages
 
@@ -262,7 +262,7 @@ type MessageSource =
   | "user"           // human typed in Telegram
   | "cross-thread"   // another session sent this via outgoing queue
   | "heartbeat"      // periodic check-in from heartbeat-cron.sh
-  | "cli"            // tinyclaw.sh send command
+  | "cli"            // borg.sh send command
   | "system";        // internal event (startup, reset, etc.)
 ```
 
@@ -294,7 +294,7 @@ Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, 
 
 **How CWD makes it per-thread:**
 - Passport thread (`cwd: ~/workspace/passport/`) reads `~/workspace/passport/HEARTBEAT.md`
-- TinyClaw thread (`cwd: ~/workspace/tinyclaw/`) reads `~/workspace/tinyclaw/HEARTBEAT.md`
+- Borg thread (`cwd: ~/workspace/borg/`) reads `~/workspace/borg/HEARTBEAT.md`
 - Master thread (`cwd: ~/workspace/`) reads `~/workspace/HEARTBEAT.md`
 
 **HEARTBEAT.md is a living document.** The agent reads AND writes to it. It is both an input and a working to-do list:
@@ -353,17 +353,17 @@ The heartbeat system prompt includes cross-thread reporting instructions:
 
 ```typescript
 function buildHeartbeatPrompt(threadConfig: ThreadConfig): string {
-  return `You are TinyClaw heartbeat for "${threadConfig.name}" (${threadConfig.cwd}).
+  return `You are Borg heartbeat for "${threadConfig.name}" (${threadConfig.cwd}).
 
 Read HEARTBEAT.md if it exists and follow it. You can edit HEARTBEAT.md to update task status.
 Reply HEARTBEAT_OK if nothing needs attention.
 
 If something significant happened, failed, or needs attention from another thread:
-- Write a JSON file to .tinyclaw/queue/outgoing/ with a targetThreadId field to notify that thread
+- Write a JSON file to .borg/queue/outgoing/ with a targetThreadId field to notify that thread
 - To notify the Master thread, use targetThreadId: 1
-- Format: {"channel":"telegram","targetThreadId":1,"sourceThreadId":${threadConfig.threadId},"sender":"tinyclaw:${threadConfig.name}","message":"<what happened>","timestamp":${Date.now()},"messageId":"heartbeat_alert_<unique>"}
+- Format: {"channel":"telegram","targetThreadId":1,"sourceThreadId":${threadConfig.threadId},"sender":"borg:${threadConfig.name}","message":"<what happened>","timestamp":${Date.now()},"messageId":"heartbeat_alert_<unique>"}
 
-Active threads are listed in .tinyclaw/threads.json if you need to find the right targetThreadId.`;
+Active threads are listed in .borg/threads.json if you need to find the right targetThreadId.`;
 }
 ```
 
@@ -400,7 +400,7 @@ HEARTBEAT_OK if nothing needs attention.
 
 Every message gets the current local time prepended via the `UserPromptSubmit` hook. The timezone is configured in settings.
 
-**In `.tinyclaw/settings.json`:**
+**In `.borg/settings.json`:**
 
 ```json
 {
@@ -541,13 +541,13 @@ async function processQueue(): Promise<void> {
 
 ### 3. Local JSONL Message History
 
-Store every message (inbound and outbound, from any thread) in `.tinyclaw/message-history.jsonl`.
+Store every message (inbound and outbound, from any thread) in `.borg/message-history.jsonl`.
 
 **Log format:**
 
 ```jsonl
 {"ts":1707580800000,"threadId":5,"channel":"telegram","sender":"alice","direction":"in","message":"Can you refactor the auth module?","sessionId":"def-456"}
-{"ts":1707580830000,"threadId":5,"channel":"telegram","sender":"tinyclaw","direction":"out","message":"I'll look at the auth module...","sessionId":"def-456","model":"opus"}
+{"ts":1707580830000,"threadId":5,"channel":"telegram","sender":"borg","direction":"out","message":"I'll look at the auth module...","sessionId":"def-456","model":"opus"}
 {"ts":1707581400000,"threadId":1,"channel":"heartbeat","sender":"system","direction":"in","message":"Quick status check","sessionId":"abc-123"}
 ```
 
@@ -657,7 +657,7 @@ bot.on("message:text").filter(
   };
 
   writeFileSync(
-    `.tinyclaw/queue/incoming/telegram_${messageId}.json`,
+    `.borg/queue/incoming/telegram_${messageId}.json`,
     JSON.stringify(queueData),
   );
 
@@ -690,7 +690,7 @@ bot.command("status", async (ctx) => {
 process.once("SIGINT", () => bot.stop());
 process.once("SIGTERM", () => bot.stop());
 
-bot.start({ onStart: () => console.log("TinyClaw Telegram bot started") });
+bot.start({ onStart: () => console.log("Borg Telegram bot started") });
 ```
 
 **Key features:**
@@ -750,11 +750,11 @@ Delete both clients and all references:
 | `src/whatsapp-client.ts` | Delete entirely |
 | `src/discord-client.ts` | Delete entirely |
 | `package.json` | Remove `whatsapp-web.js`, `qrcode-terminal`, `@types/qrcode-terminal`, `discord.js`, `dotenv`; add `@anthropic-ai/claude-agent-sdk`, `grammy`, `@grammyjs/auto-chat-action`, `@grammyjs/auto-retry`, `zod` |
-| `tinyclaw.sh` | Rewrite for Telegram-only: 3 panes (telegram + queue + logs) |
+| `borg.sh` | Rewrite for Telegram-only: 3 panes (telegram + queue + logs) |
 | `setup-wizard.sh` | Remove WhatsApp/Discord options, add Telegram bot token + group chat ID |
 | `README.md` | Remove WhatsApp/Discord references, document Telegram forum setup |
 | `.claude/hooks/session-start.sh` | Update to reflect new architecture |
-| `.gitignore` | Remove `.tinyclaw/whatsapp-session/`, `.wwebjs_cache`; add `.tinyclaw/threads.json`, `.tinyclaw/message-history.jsonl` |
+| `.gitignore` | Remove `.borg/whatsapp-session/`, `.wwebjs_cache`; add `.borg/threads.json`, `.borg/message-history.jsonl` |
 
 ## Queue Message Format
 
@@ -799,7 +799,7 @@ Delete both clients and all references:
   "source": "cross-thread",
   "threadId": 1,
   "sourceThreadId": 5,
-  "sender": "tinyclaw:Passport",
+  "sender": "borg:Passport",
   "message": "Completed auth refactor. Ready for review.",
   "isReply": false,
   "timestamp": 1707580900000,
@@ -828,7 +828,7 @@ Delete both clients and all references:
 {
   "channel": "telegram",
   "targetThreadId": 1,
-  "sender": "tinyclaw",
+  "sender": "borg",
   "message": "Completed auth refactor in Passport thread.",
   "timestamp": 1707580900000,
   "messageId": "cross_1707580900_xyz",
@@ -907,7 +907,7 @@ process.once("SIGTERM", gracefulShutdown);
 
 Messages that fail processing get a retry counter. After 3 failures, move to a dead-letter directory instead of retrying forever:
 
-- `.tinyclaw/queue/dead-letter/` -- messages that failed 3 times
+- `.borg/queue/dead-letter/` -- messages that failed 3 times
 - Retry counter tracked in the filename: `telegram_msg123_retry2.json`
 - Dead-letter messages logged with error details for manual inspection
 
@@ -931,7 +931,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 3. Create the bot via @BotFather, get token
 4. Add bot to the group as admin with `can_manage_topics` permission
 5. Get the group chat ID (negative number, e.g., `-1001234567890`)
-6. Configure in `.tinyclaw/settings.json`: `telegram_bot_token`, `telegram_chat_id`, `timezone`
+6. Configure in `.borg/settings.json`: `telegram_bot_token`, `telegram_chat_id`, `timezone`
 
 ### Settings Format
 
@@ -958,7 +958,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 - [x] `session.close()` called in all code paths (try/finally)
 
 ### Message History
-- [x] All messages (in/out, all threads) appended to `.tinyclaw/message-history.jsonl`
+- [x] All messages (in/out, all threads) appended to `.borg/message-history.jsonl`
 - [x] `UserPromptSubmit` hook injects same-thread history for workers, all-thread history for master
 - [x] System prompt includes compaction recovery instructions
 - [x] Agent can search older history via Grep/Bash on the JSONL file
@@ -969,7 +969,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 - [x] Reply to bot message = upgrade-only (`maxTier`)
 - [x] Fresh message = free pick (can downgrade)
 - [x] Model switch triggers close + resume with new model
-- [x] Routing decisions logged to `.tinyclaw/routing-log.jsonl`
+- [x] Routing decisions logged to `.borg/routing-log.jsonl`
 - [x] Heartbeat messages bypass router, always use haiku
 
 ### Per-Thread Heartbeats
@@ -981,7 +981,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 - [x] Heartbeat interval configurable in settings
 
 ### Time Awareness
-- [x] Timezone configured in `.tinyclaw/settings.json`
+- [x] Timezone configured in `.borg/settings.json`
 - [x] `UserPromptSubmit` hook injects current local time before every message
 - [x] Format: `[Monday, Feb 10, 2026, 3:42 PM MST]`
 
@@ -1015,7 +1015,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 - [x] WhatsApp client fully removed (code, deps, shell scripts, docs)
 - [x] Discord client fully removed (code, deps, shell scripts, docs)
 - [x] `package.json` updated (old deps removed, new deps added)
-- [x] `tinyclaw.sh` rewritten for Telegram-only (3 panes: telegram + queue + logs)
+- [x] `borg.sh` rewritten for Telegram-only (3 panes: telegram + queue + logs)
 - [x] `setup-wizard.sh` updated for Telegram config
 - [x] CLAUDE.md created with agent system instructions
 - [x] Queue polling upgraded to `fs.watch` + 5-second fallback
@@ -1034,7 +1034,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 - [x] 9. **Create CLAUDE.md** with agent system instructions
 - [ ] 10. **Create per-project HEARTBEAT.md** templates (workspace-level + example per-repo)
 - [x] 11. **Update heartbeat-cron.sh** (iterate threads.json, per-thread heartbeats, generic prompt)
-- [x] 12. **Update tinyclaw.sh** (3 panes: telegram + queue + logs)
+- [x] 12. **Update borg.sh** (3 panes: telegram + queue + logs)
 - [x] 13. **Update setup-wizard.sh** (Telegram bot token + group chat ID + timezone)
 - [x] 14. **Add routing decision logger** (`src/routing-logger.ts`)
 - [ ] 15. **Test end-to-end** via Telegram forum topic (user messages, cross-thread, heartbeats, model switching)
@@ -1059,7 +1059,7 @@ Each active SDK session spawns a child process (~50-100MB RAM). To prevent resou
 - Queue processor: `src/queue-processor.ts` (201 lines, core rewrite target)
 - Discord client: `src/discord-client.ts` (269 lines, delete entirely)
 - WhatsApp client: `src/whatsapp-client.ts` (287 lines, delete entirely)
-- tmux launcher: `tinyclaw.sh` (556 lines, significant rewrite)
+- tmux launcher: `borg.sh` (556 lines, significant rewrite)
 - Router source: `/home/clawcian/.openclaw/workspace/anthropic-router/src/router/` (4 files, zero external deps)
 - Decision logger: `/home/clawcian/.openclaw/workspace/anthropic-router/src/logger.ts`
 

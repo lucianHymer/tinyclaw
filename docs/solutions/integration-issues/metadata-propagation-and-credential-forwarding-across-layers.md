@@ -57,7 +57,7 @@ This revealed the bot was containerized (not running directly on host as initial
 ### Verifying the credential broker works
 
 ```bash
-docker exec tinyclaw-bot-1 sh -c \
+docker exec borg-bot-1 sh -c \
   'curl -s -H "Authorization: Bearer $BROKER_SECRET" \
    "http://broker:3000/token?installation_id=109312648"'
 # {"token":"ghs_...","expires_at":"2026-02-10T23:18:51Z"}
@@ -68,7 +68,7 @@ Broker successfully mints tokens. Git credential helper uses this and works.
 ### Identifying the gh auth gap
 
 ```bash
-docker exec tinyclaw-bot-1 gh auth status
+docker exec borg-bot-1 gh auth status
 # You are not logged into any GitHub hosts.
 ```
 
@@ -213,13 +213,13 @@ If the system prompt claims "gh is authenticated", verify it actually works insi
 
 ```bash
 # Topic names: create a forum topic, send a message, check threads.json
-cat .tinyclaw/threads.json | jq '.[] | .name'
+cat .borg/threads.json | jq '.[] | .name'
 
 # gh auth: test from inside container
-docker exec tinyclaw-bot-1 gh repo list passportxyz --limit 2
+docker exec borg-bot-1 gh repo list passportxyz --limit 2
 
 # git auth: test clone
-docker exec tinyclaw-bot-1 git ls-remote https://github.com/passportxyz/passport
+docker exec borg-bot-1 git ls-remote https://github.com/passportxyz/passport
 
 # Ask agent to use GitHub
 # Send message: "List the open issues on passportxyz/passport"

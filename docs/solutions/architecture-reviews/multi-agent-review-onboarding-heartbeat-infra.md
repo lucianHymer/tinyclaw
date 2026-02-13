@@ -3,7 +3,7 @@ problem_type: architecture-review
 title: "Full Pipeline: Brainstorm to Compound — Onboarding, Heartbeat, and Infrastructure"
 date: 2026-02-11
 branch: feat/onboarding-heartbeat-infra
-project: TinyClaw
+project: Borg
 pipeline_stages:
   - brainstorm
   - plan
@@ -63,7 +63,7 @@ All 7 commits occurred on 2026-02-11, spanning ~6 hours.
 
 ## Stage 1: Brainstorm
 
-The brainstorm between Lucian and Claude identified three interconnected capabilities to transform TinyClaw from a single-user tool into a team adoption platform, plus a fourth added 25 minutes later:
+The brainstorm between Lucian and Claude identified three interconnected capabilities to transform Borg from a single-user tool into a team adoption platform, plus a fourth added 25 minutes later:
 
 ### Feature 1: Smart Heartbeat System
 
@@ -360,7 +360,7 @@ The plan's "Simplifications Applied" is a binding contract. Cross-reference befo
 
 ## Related Documentation
 
-- [`docs/solutions/integration-issues/tinyclaw-v2-evolution-from-fork-to-forum-agent.md`](../integration-issues/tinyclaw-v2-evolution-from-fork-to-forum-agent.md) — Canonical patterns (atomic writes, JSONL safety)
+- [`docs/solutions/integration-issues/borg-v2-evolution-from-fork-to-forum-agent.md`](../integration-issues/borg-v2-evolution-from-fork-to-forum-agent.md) — Canonical patterns (atomic writes, JSONL safety)
 - [`docs/solutions/integration-issues/sdk-v2-mcpservers-silent-ignore.md`](../integration-issues/sdk-v2-mcpservers-silent-ignore.md) — MCP tool infrastructure
 - [`docs/solutions/integration-issues/metadata-propagation-and-credential-forwarding-across-layers.md`](../integration-issues/metadata-propagation-and-credential-forwarding-across-layers.md) — Docker env var propagation
 - [`docs/solutions/workflow-patterns/parallel-subagent-orchestration-bulk-todo-resolution.md`](../workflow-patterns/parallel-subagent-orchestration-bulk-todo-resolution.md) — Parallel resolution pattern

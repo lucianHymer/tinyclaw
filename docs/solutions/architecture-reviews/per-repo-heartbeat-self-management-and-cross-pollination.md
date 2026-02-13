@@ -215,6 +215,6 @@ Frame agent-owned files as "your operational playbook" and explicitly teach evol
 - **Parent plan:** `docs/plans/2026-02-11-feat-onboarding-heartbeat-infra-plan.md`
 - **Brainstorm:** `docs/brainstorms/2026-02-11-onboarding-heartbeat-infra-brainstorm.md`
 - **Architecture review (full pipeline):** `docs/solutions/architecture-reviews/multi-agent-review-onboarding-heartbeat-infra.md`
-- **Evolution doc:** `docs/solutions/integration-issues/tinyclaw-v2-evolution-from-fork-to-forum-agent.md`
+- **Evolution doc:** `docs/solutions/integration-issues/borg-v2-evolution-from-fork-to-forum-agent.md`
 - **MCP tool infrastructure:** `docs/solutions/integration-issues/sdk-v2-mcpservers-silent-ignore.md`
 - **Parallel orchestration:** `docs/solutions/workflow-patterns/parallel-subagent-orchestration-bulk-todo-resolution.md`

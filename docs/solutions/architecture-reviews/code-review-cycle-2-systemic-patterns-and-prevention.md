@@ -285,7 +285,7 @@ Four fixes:
 
 ```bash
 # 1. Non-atomic writes to queue/state directories
-grep -rn "writeFileSync\|fs\.write(" src/ | grep -E "queue|\.tinyclaw" | grep -v "\.tmp" && FAIL
+grep -rn "writeFileSync\|fs\.write(" src/ | grep -E "queue|\.borg" | grep -v "\.tmp" && FAIL
 
 # 2. Metric functions outside host-metrics.ts
 for func in parseMeminfo parseCpuPercent getDiskUsage countQueueFiles; do

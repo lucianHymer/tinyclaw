@@ -56,13 +56,13 @@ brainstorm: docs/brainstorms/2026-02-11-onboarding-heartbeat-infra-brainstorm.md
 
 ## Overview
 
-Turn TinyClaw into a team adoption platform with four interconnected capabilities: a tiered heartbeat monitoring system that makes threads proactively aware of their repos, a master thread knowledge base for organizational memory, Docker-based dev containers for onboarding developers to Claude Code, and a live memory rebalancing dashboard.
+Turn Borg into a team adoption platform with four interconnected capabilities: a tiered heartbeat monitoring system that makes threads proactively aware of their repos, a master thread knowledge base for organizational memory, Docker-based dev containers for onboarding developers to Claude Code, and a live memory rebalancing dashboard.
 
 **Implementation order:** Heartbeat (prompt-only) → Master Thread (config + prompt) → Dev Containers (Docker infra) → Memory Dashboard (UI + Docker API). Each phase is independently deliverable.
 
 ## Problem Statement
 
-TinyClaw currently operates as a single-user tool with minimal heartbeat monitoring ("any pending tasks?") and no infrastructure for onboarding additional developers. The heartbeat is a flat haiku one-shot that doesn't leverage git awareness, CI monitoring, or cross-thread coordination. There is no persistent organizational memory beyond individual thread sessions. New developers have no standardized way to access Claude Code in a team context.
+Borg currently operates as a single-user tool with minimal heartbeat monitoring ("any pending tasks?") and no infrastructure for onboarding additional developers. The heartbeat is a flat haiku one-shot that doesn't leverage git awareness, CI monitoring, or cross-thread coordination. There is no persistent organizational memory beyond individual thread sessions. New developers have no standardized way to access Claude Code in a team context.
 
 ## Proposed Solution
 
@@ -327,9 +327,9 @@ Worker thread daily heartbeat (sonnet)
 
 ```
 Hetzner Box (32GB RAM)
-├── TinyClaw Stack (existing docker-compose)
+├── Borg Stack (existing docker-compose)
 │   ├── broker (credential broker - GitHub App tokens)
-│   ├── bot (TinyClaw Telegram bot + queue processor)
+│   ├── bot (Borg Telegram bot + queue processor)
 │   └── dashboard
 ├── Dev Container: alice (SSH on port 2201)
 │   ├── Claude Code CLI (pre-installed)
@@ -406,7 +406,7 @@ RUN chmod +x /usr/local/bin/github-token-helper.sh /usr/local/bin/gh-wrapper.sh 
 # Git config (credential broker integration)
 RUN git config --system credential.helper '!/usr/local/bin/github-token-helper.sh' \
     && git config --system user.name "Dev" \
-    && git config --system user.email "dev@tinyclaw"
+    && git config --system user.email "dev@borg"
 
 # Replace gh binary with wrapper
 RUN mv /usr/bin/gh /usr/bin/gh-real \
@@ -455,15 +455,15 @@ SSH_KEY_FILE="$3"
 MEMORY_LIMIT="${4:-2g}"  # Default 2GB (not 3GB — supports 10+ containers on 32GB)
 
 # Discover compose network dynamically (pattern-consistency fix)
-NETWORK=$(docker network ls --filter "label=com.docker.compose.project=tinyclaw" \
+NETWORK=$(docker network ls --filter "label=com.docker.compose.project=borg" \
     --format '{{.Name}}' | grep internal || true)
 if [ -z "$NETWORK" ]; then
-    log "ERROR: Could not find tinyclaw internal network. Is docker-compose running?"
+    log "ERROR: Could not find borg internal network. Is docker-compose running?"
     exit 1
 fi
 
 # Build image if not exists
-docker build -t tinyclaw-dev -f Dockerfile.dev-container .
+docker build -t borg-dev -f Dockerfile.dev-container .
 
 # Create and start container
 log "Creating container dev-${DEV_NAME} on port ${SSH_PORT} with ${MEMORY_LIMIT} memory"
@@ -471,7 +471,7 @@ docker run -d \
     --name "dev-${DEV_NAME}" \
     --network "${NETWORK}" \
     --hostname "dev-${DEV_NAME}" \
-    --label "tinyclaw.type=dev-container" \
+    --label "borg.type=dev-container" \
     -p "${SSH_PORT}:22" \
     --memory "${MEMORY_LIMIT}" \
     --memory-swap "${MEMORY_LIMIT}" \
@@ -481,7 +481,7 @@ docker run -d \
     -e BROKER_SECRET="${BROKER_SECRET}" \
     -v "/secrets/github-installations.json:/secrets/github-installations.json:ro" \
     --restart unless-stopped \
-    tinyclaw-dev
+    borg-dev
 
 # Inject SSH key
 docker exec "dev-${DEV_NAME}" bash -c \
@@ -495,10 +495,10 @@ log "SSH: ssh -p ${SSH_PORT} dev@<host>"
 
 **Changes from research:**
 - `set -euo pipefail` (pattern consistency with existing scripts)
-- Argument validation with usage help (matches `tinyclaw.sh` pattern)
+- Argument validation with usage help (matches `borg.sh` pattern)
 - `log()` function for timestamped output (matches existing convention)
 - Dynamic network discovery (not hardcoded)
-- `--label tinyclaw.type=dev-container` for dashboard filtering
+- `--label borg.type=dev-container` for dashboard filtering
 - `--memory-swap` equals `--memory` (disables swap — clean OOM kills)
 - `--cap-drop NET_RAW` (prevents network sniffing from inside container)
 - Default 2GB (not 3GB) — supports 10+ containers on 32GB host
@@ -588,7 +588,7 @@ Developer runs: git push origin main
 
 **Network path:** Dev container → Docker internal network → broker container (port 3000). The broker is already on the `internal` network via docker-compose.yml.
 
-**Important:** The compose-managed network is named `tinyclaw_internal` (project prefix + network name). The provisioning script must use this exact name, not just `internal`.
+**Important:** The compose-managed network is named `borg_internal` (project prefix + network name). The provisioning script must use this exact name, not just `internal`.
 
 ### Container Lifecycle
 
@@ -609,7 +609,7 @@ Create `docs/onboarding/` with:
 **`getting-started.md`** — "Your First 10 Minutes" one-pager:
 
 ```markdown
-# Getting Started with TinyClaw
+# Getting Started with Borg
 
 ## Two Ways to Work
 
@@ -693,7 +693,7 @@ Host claude-dev
 - [ ] `gh` CLI works for PR operations
 - [ ] tmux auto-attaches on SSH connection (session persistence)
 - [ ] Container has memory limit enforced via cgroup
-- [ ] Container joins the correct Docker network (tinyclaw_internal)
+- [ ] Container joins the correct Docker network (borg_internal)
 - [ ] Password auth is disabled; only SSH key auth works
 - [ ] Onboarding kit documents the complete flow
 
@@ -809,7 +809,7 @@ POST /api/containers/:id/memory { limit: "8g" }
 
 ### Telegram Notification Mechanism
 
-The dashboard calls the Telegram Bot API directly (avoids changing the read-only `.tinyclaw` volume mount):
+The dashboard calls the Telegram Bot API directly (avoids changing the read-only `.borg` volume mount):
 
 ```typescript
 async function notifyMemoryChange(containerName: string, oldLimit: string, newLimit: string): Promise<void> {
@@ -881,7 +881,7 @@ function onSSEUpdate(containers) {
 1. Sum of all container memory limits must not exceed host total RAM minus 2GB (OS reserve)
 2. No container limit below 256MB (Docker minimum is 4MB, but 256MB is practical floor)
 3. Warning (non-blocking) if lowering a running container's limit below its current usage — Docker will OOM-kill immediately with no grace period
-4. Only allow adjusting containers with `tinyclaw.type=dev-container` label — infrastructure containers (broker, bot, dashboard) should not be adjustable from the UI
+4. Only allow adjusting containers with `borg.type=dev-container` label — infrastructure containers (broker, bot, dashboard) should not be adjustable from the UI
 5. When raising `Memory`, also raise `MemorySwap` to match (Docker rejects Memory > MemorySwap)
 6. Add `express.json()` middleware to the dashboard (first POST endpoint — currently no JSON body parsing configured)
 
@@ -906,7 +906,7 @@ const getContainerStats = tool(
     {},
     async () => {
         const resp = await fetch(`${DOCKER_PROXY_URL}/containers/json`);
-        // ... filter by tinyclaw.type=dev-container label, format and return
+        // ... filter by borg.type=dev-container label, format and return
     },
 );
 
@@ -1017,11 +1017,11 @@ graph LR
 
 ### Institutional Learnings Applied
 
-- Atomic file writes (.tmp + rename) for all new file I/O — `docs/solutions/integration-issues/tinyclaw-v2-evolution-from-fork-to-forum-agent.md`
+- Atomic file writes (.tmp + rename) for all new file I/O — `docs/solutions/integration-issues/borg-v2-evolution-from-fork-to-forum-agent.md`
 - Parallel orchestration with Edit tool (not Write) for shared files — `docs/solutions/workflow-patterns/parallel-subagent-orchestration-bulk-todo-resolution.md`
 - Session cleanup: always call session.close() in try/finally — same evolution doc
 - SDK v2 mcpServers silently ignored; use file queue + system prompt for cross-thread — `docs/solutions/integration-issues/sdk-v2-mcpservers-silent-ignore.md`
-- First-run checklist for deployment validation — `docs/solutions/integration-issues/tinyclaw-v2-first-live-run-fixes.md`
+- First-run checklist for deployment validation — `docs/solutions/integration-issues/borg-v2-first-live-run-fixes.md`
 
 ### External Research Sources
 

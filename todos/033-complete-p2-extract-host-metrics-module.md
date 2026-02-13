@@ -27,7 +27,7 @@ tags: [code-review, architecture, duplication]
 ## Technical Details
 - Affected: `src/dashboard.ts`, `src/mcp-tools.ts`
 - New file: `src/host-metrics.ts`
-- The `getDiskUsage()` function uses `TINYCLAW_DIR` for `statfsSync` — parameterize the directory argument
+- The `getDiskUsage()` function uses `BORG_DIR` for `statfsSync` — parameterize the directory argument
 
 ## Acceptance Criteria
 - [ ] `parseMeminfo`, `parseCpuPercent`, `getDiskUsage`, `countQueueFiles` exist in only one location

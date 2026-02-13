@@ -1,17 +1,25 @@
 #!/bin/bash
-# TinyClaw - Docker Compose Wrapper
-# Manages the TinyClaw stack: bot, broker, dashboard, cloudflared
+# Borg - Docker Compose Wrapper
+# Manages the Borg stack: bot, broker, dashboard, cloudflared
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
-SETTINGS_FILE="$SCRIPT_DIR/.tinyclaw/settings.json"
-LOG_DIR="$SCRIPT_DIR/.tinyclaw/logs"
+
+# One-time migration from .tinyclaw/ to .borg/
+if [ -d "$SCRIPT_DIR/.tinyclaw" ] && [ ! -d "$SCRIPT_DIR/.borg" ]; then
+    echo "Migrating .tinyclaw/ to .borg/..."
+    mv -T "$SCRIPT_DIR/.tinyclaw" "$SCRIPT_DIR/.borg" 2>/dev/null || true
+    echo "Migration complete."
+fi
+
+SETTINGS_FILE="$SCRIPT_DIR/.borg/settings.json"
+LOG_DIR="$SCRIPT_DIR/.borg/logs"
 
 # Compose project name is derived from the directory name
-COMPOSE_PROJECT="tinyclaw"
-VOLUME_NAME="${COMPOSE_PROJECT}_tinyclaw-data"
+COMPOSE_PROJECT="borg"
+VOLUME_NAME="${COMPOSE_PROJECT}_borg-data"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -32,7 +40,7 @@ dc() {
     docker compose -f "$COMPOSE_FILE" --project-directory "$SCRIPT_DIR" "$@"
 }
 
-# Get the host mount point of the tinyclaw-data volume
+# Get the host mount point of the borg-data volume
 volume_mountpoint() {
     docker volume inspect "$VOLUME_NAME" --format '{{ .Mountpoint }}' 2>/dev/null
 }
@@ -54,19 +62,19 @@ read_settings_file() {
 # ─── Commands ─────────────────────────────────────────────────────────────────
 
 cmd_start() {
-    log "Starting TinyClaw stack..."
+    log "Starting Borg stack..."
     dc up -d
-    echo -e "${GREEN}TinyClaw stack started${NC}"
+    echo -e "${GREEN}Borg stack started${NC}"
     echo "  Services: bot, broker, dashboard, cloudflared"
-    echo "  Logs:     ./tinyclaw.sh logs"
-    log "TinyClaw stack started"
+    echo "  Logs:     ./borg.sh logs"
+    log "Borg stack started"
 }
 
 cmd_stop() {
-    log "Stopping TinyClaw stack..."
+    log "Stopping Borg stack..."
     dc down
-    echo -e "${GREEN}TinyClaw stack stopped${NC}"
-    log "TinyClaw stack stopped"
+    echo -e "${GREEN}Borg stack stopped${NC}"
+    log "Borg stack stopped"
 }
 
 cmd_restart() {
@@ -75,15 +83,15 @@ cmd_restart() {
         dc restart "$2"
         echo -e "${GREEN}Restarted: $2${NC}"
     else
-        log "Restarting TinyClaw stack..."
+        log "Restarting Borg stack..."
         dc restart
-        echo -e "${GREEN}TinyClaw stack restarted${NC}"
+        echo -e "${GREEN}Borg stack restarted${NC}"
     fi
-    log "TinyClaw restart complete"
+    log "Borg restart complete"
 }
 
 cmd_status() {
-    echo -e "${BLUE}TinyClaw Status${NC}"
+    echo -e "${BLUE}Borg Status${NC}"
     echo "==============="
     echo ""
 
@@ -141,16 +149,16 @@ cmd_send() {
 
     # Check if bot container is running
     if dc ps --status running --format '{{.Service}}' 2>/dev/null | grep -q '^bot$'; then
-        echo "$json" | dc exec -T bot sh -c "cat > /app/.tinyclaw/queue/incoming/${MESSAGE_ID}.json"
+        echo "$json" | dc exec -T bot sh -c "cat > /app/.borg/queue/incoming/${MESSAGE_ID}.json"
         echo -e "${GREEN}Message queued via container: $MESSAGE_ID${NC}"
-    elif [ -d "$SCRIPT_DIR/.tinyclaw/queue/incoming" ]; then
+    elif [ -d "$SCRIPT_DIR/.borg/queue/incoming" ]; then
         # Fallback: write to local filesystem (migration compat)
-        echo "$json" > "$SCRIPT_DIR/.tinyclaw/queue/incoming/${MESSAGE_ID}.json"
+        echo "$json" > "$SCRIPT_DIR/.borg/queue/incoming/${MESSAGE_ID}.json"
         echo -e "${GREEN}Message queued to local filesystem: $MESSAGE_ID${NC}"
         echo -e "${YELLOW}Note: bot container is not running${NC}"
     else
         echo -e "${RED}Bot container is not running and no local queue directory exists${NC}"
-        echo "Start the stack first: ./tinyclaw.sh start"
+        echo "Start the stack first: ./borg.sh start"
         exit 1
     fi
 
@@ -158,11 +166,11 @@ cmd_send() {
 }
 
 cmd_migrate() {
-    echo -e "${BLUE}Migrating local .tinyclaw/ data into Docker volume...${NC}"
+    echo -e "${BLUE}Migrating local .borg/ data into Docker volume...${NC}"
 
-    local src_dir="$SCRIPT_DIR/.tinyclaw"
+    local src_dir="$SCRIPT_DIR/.borg"
     if [ ! -d "$src_dir" ]; then
-        echo -e "${RED}No local .tinyclaw/ directory found${NC}"
+        echo -e "${RED}No local .borg/ directory found${NC}"
         exit 1
     fi
 
@@ -179,7 +187,7 @@ cmd_migrate() {
     for f in "${files[@]}"; do
         if [ -f "$src_dir/$f" ]; then
             echo "  Copying $f..."
-            dc cp "$src_dir/$f" "bot:/app/.tinyclaw/$f"
+            dc cp "$src_dir/$f" "bot:/app/.borg/$f"
         else
             echo -e "  ${YELLOW}Skipping $f (not found)${NC}"
         fi
@@ -188,29 +196,29 @@ cmd_migrate() {
     # Copy queue directory contents if any
     if [ -d "$src_dir/queue" ]; then
         echo "  Copying queue directory..."
-        dc exec -T bot sh -c "mkdir -p /app/.tinyclaw/queue/incoming /app/.tinyclaw/queue/outgoing"
+        dc exec -T bot sh -c "mkdir -p /app/.borg/queue/incoming /app/.borg/queue/outgoing"
         for qfile in "$src_dir/queue/incoming/"*.json; do
-            [ -f "$qfile" ] && dc cp "$qfile" "bot:/app/.tinyclaw/queue/incoming/$(basename "$qfile")"
+            [ -f "$qfile" ] && dc cp "$qfile" "bot:/app/.borg/queue/incoming/$(basename "$qfile")"
         done 2>/dev/null || true
     fi
 
     # Clear sessionId from migrated threads.json (sessions don't survive container boundary)
     echo "  Clearing sessionId from threads.json..."
     dc exec -T bot sh -c '
-        if [ -f /app/.tinyclaw/threads.json ]; then
+        if [ -f /app/.borg/threads.json ]; then
             tmp=$(mktemp)
             jq "walk(if type == \"object\" and has(\"sessionId\") then del(.sessionId) else . end)" \
-                /app/.tinyclaw/threads.json > "$tmp" && mv "$tmp" /app/.tinyclaw/threads.json
+                /app/.borg/threads.json > "$tmp" && mv "$tmp" /app/.borg/threads.json
         fi
     '
 
     echo -e "${GREEN}Migration complete${NC}"
     echo "  Cleared sessionId values (sessions are not portable across boundaries)"
-    echo "  Restart the stack to pick up migrated data: ./tinyclaw.sh restart"
+    echo "  Restart the stack to pick up migrated data: ./borg.sh restart"
 }
 
 cmd_build() {
-    echo -e "${BLUE}Building TinyClaw Docker images...${NC}"
+    echo -e "${BLUE}Building Borg Docker images...${NC}"
     dc build "$@"
     echo -e "${GREEN}Build complete${NC}"
 }
@@ -234,10 +242,10 @@ cmd_model() {
                 # Update settings.json inside the volume via the bot container
                 if dc ps --status running --format '{{.Service}}' 2>/dev/null | grep -q '^bot$'; then
                     dc exec -T bot sh -c "
-                        if [ -f /app/.tinyclaw/settings.json ]; then
+                        if [ -f /app/.borg/settings.json ]; then
                             tmp=\$(mktemp)
                             sed 's/\"model\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"model\": \"$new_model\"/' \
-                                /app/.tinyclaw/settings.json > \"\$tmp\" && mv \"\$tmp\" /app/.tinyclaw/settings.json
+                                /app/.borg/settings.json > \"\$tmp\" && mv \"\$tmp\" /app/.borg/settings.json
                         else
                             echo 'settings.json not found' >&2
                             exit 1
@@ -264,7 +272,7 @@ cmd_model() {
 }
 
 cmd_help() {
-    echo -e "${BLUE}TinyClaw - Docker Compose Wrapper${NC}"
+    echo -e "${BLUE}Borg - Docker Compose Wrapper${NC}"
     echo ""
     echo "Usage: $0 <command> [args]"
     echo ""
@@ -276,7 +284,7 @@ cmd_help() {
     echo "  logs [service]         Follow logs (bot|broker|dashboard|cloudflared|all)"
     echo "  build                  Build Docker images"
     echo "  send <msg>             Send a CLI message to the queue (thread 1)"
-    echo "  migrate                Copy local .tinyclaw/ data into Docker volume"
+    echo "  migrate                Copy local .borg/ data into Docker volume"
     echo "  model [sonnet|opus]    Show or switch the Claude model"
     echo "  help                   Show this help message"
     echo ""

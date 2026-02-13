@@ -4,10 +4,10 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="$SCRIPT_DIR/.tinyclaw/logs/heartbeat.log"
-QUEUE_INCOMING="$SCRIPT_DIR/.tinyclaw/queue/incoming"
-SETTINGS_FILE="$SCRIPT_DIR/.tinyclaw/settings.json"
-THREADS_FILE="$SCRIPT_DIR/.tinyclaw/threads.json"
+LOG_FILE="$SCRIPT_DIR/.borg/logs/heartbeat.log"
+QUEUE_INCOMING="$SCRIPT_DIR/.borg/queue/incoming"
+SETTINGS_FILE="$SCRIPT_DIR/.borg/settings.json"
+THREADS_FILE="$SCRIPT_DIR/.borg/threads.json"
 
 # Read interval from settings.json, default to 500
 if [ -f "$SETTINGS_FILE" ]; then
@@ -94,7 +94,7 @@ while true; do
     sleep 30
 
     for THREAD_ID in $THREAD_IDS; do
-        RESPONSE_PATTERN="$SCRIPT_DIR/.tinyclaw/queue/outgoing/heartbeat_${THREAD_ID}_*.json"
+        RESPONSE_PATTERN="$SCRIPT_DIR/.borg/queue/outgoing/heartbeat_${THREAD_ID}_*.json"
         for RESPONSE_FILE in $RESPONSE_PATTERN; do
             if [ -f "$RESPONSE_FILE" ]; then
                 RESPONSE=$(jq -r '.message // empty' "$RESPONSE_FILE" 2>/dev/null)

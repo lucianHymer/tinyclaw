@@ -1,5 +1,5 @@
 /**
- * Dashboard - Real-time monitoring server for TinyClaw
+ * Dashboard - Real-time monitoring server for Borg
  * Serves a single HTML page with 7 views and provides API + SSE endpoints.
  */
 
@@ -20,9 +20,9 @@ import { parseMeminfo, parseCpuPercent, getDiskUsage, countQueueFiles, PROC_BASE
 import { toErrorMessage, isValidSessionId, ValidationError } from "./types.js";
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
-const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
+const BORG_DIR = path.join(SCRIPT_DIR, ".borg");
 const STATIC_DIR = path.join(SCRIPT_DIR, "static");
-const SESSIONS_DIR = path.join(TINYCLAW_DIR, "sessions");
+const SESSIONS_DIR = path.join(BORG_DIR, "sessions");
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
 const DOCKER_PROXY_URL = process.env.DOCKER_PROXY_URL || "http://localhost:2375";
 const COMPOSE_PROJECT = process.env.COMPOSE_PROJECT || "";
@@ -145,16 +145,16 @@ app.get("/health", (_req, res) => {
 // GET /api/status — service health, queue depth, thread summary, host metrics
 app.get("/api/status", (_req, res) => {
     const threads = readJsonSafe<Record<string, unknown>>(
-        path.join(TINYCLAW_DIR, "threads.json"),
+        path.join(BORG_DIR, "threads.json"),
         {},
     );
-    const queueIncoming = countQueueFiles(path.join(TINYCLAW_DIR, "queue/incoming"));
-    const queueProcessing = countQueueFiles(path.join(TINYCLAW_DIR, "queue/processing"));
-    const queueDeadLetter = countQueueFiles(path.join(TINYCLAW_DIR, "queue/dead-letter"));
+    const queueIncoming = countQueueFiles(path.join(BORG_DIR, "queue/incoming"));
+    const queueProcessing = countQueueFiles(path.join(BORG_DIR, "queue/processing"));
+    const queueDeadLetter = countQueueFiles(path.join(BORG_DIR, "queue/dead-letter"));
     const memBytes = parseMeminfo();
     const cpu = parseCpuPercent();
     const load = parseLoadAvg();
-    const disk = getDiskUsage(TINYCLAW_DIR);
+    const disk = getDiskUsage(BORG_DIR);
     const mem = {
         totalMB: Math.round(memBytes.totalBytes / 1024 / 1024),
         usedMB: Math.round((memBytes.totalBytes - memBytes.availableBytes) / 1024 / 1024),
@@ -180,7 +180,7 @@ app.get("/api/status", (_req, res) => {
 
 // GET /api/threads — full threads.json
 app.get("/api/threads", (_req, res) => {
-    const threads = readJsonSafe(path.join(TINYCLAW_DIR, "threads.json"), {});
+    const threads = readJsonSafe(path.join(BORG_DIR, "threads.json"), {});
     res.json(threads);
 });
 
@@ -189,7 +189,7 @@ app.get("/api/threads/:id/messages", (req, res) => {
     const threadId = parseInt(req.params.id, 10);
     const limit = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
     const entries = readRecentJsonl<Record<string, unknown>>(
-        path.join(TINYCLAW_DIR, "message-history.jsonl"),
+        path.join(BORG_DIR, "message-history.jsonl"),
         500,
     );
     const filtered = entries.filter(e => e.threadId === threadId).slice(-limit);
@@ -199,7 +199,7 @@ app.get("/api/threads/:id/messages", (req, res) => {
 // GET /api/messages/recent?n=50 — recent messages across all threads
 app.get("/api/messages/recent", (req, res) => {
     const n = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
-    const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "message-history.jsonl"), n);
+    const entries = readRecentJsonl(path.join(BORG_DIR, "message-history.jsonl"), n);
     res.json(entries);
 });
 
@@ -212,7 +212,7 @@ app.get("/api/messages/feed", (_req, res) => {
     });
     res.write(":\n\n"); // SSE comment to establish connection
 
-    const historyFile = path.join(TINYCLAW_DIR, "message-history.jsonl");
+    const historyFile = path.join(BORG_DIR, "message-history.jsonl");
     const tailState: TailState = { offset: 0 };
 
     // Initialize to current EOF so we only send new messages
@@ -240,7 +240,7 @@ app.get("/api/routing/feed", (_req, res) => {
     });
     res.write(":\n\n");
 
-    const routingFile = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
+    const routingFile = path.join(BORG_DIR, "logs/routing.jsonl");
     const tailState: TailState = { offset: 0 };
 
     if (fs.existsSync(routingFile)) {
@@ -261,14 +261,14 @@ app.get("/api/routing/feed", (_req, res) => {
 // GET /api/routing/recent?n=50
 app.get("/api/routing/recent", (req, res) => {
     const n = Math.min(parseInt(String(req.query.n ?? "50"), 10) || 50, 200);
-    const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "logs/routing.jsonl"), n);
+    const entries = readRecentJsonl(path.join(BORG_DIR, "logs/routing.jsonl"), n);
     res.json(entries);
 });
 
 // GET /api/prompts/recent?n=20
 app.get("/api/prompts/recent", (req, res) => {
     const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
-    const entries = readRecentJsonl(path.join(TINYCLAW_DIR, "logs/prompts.jsonl"), n);
+    const entries = readRecentJsonl(path.join(BORG_DIR, "logs/prompts.jsonl"), n);
     res.json(entries);
 });
 
@@ -283,7 +283,7 @@ app.get("/api/metrics", (_req, res) => {
             availableMB: Math.round(memBytes.availableBytes / 1024 / 1024),
         },
         load: parseLoadAvg(),
-        disk: getDiskUsage(TINYCLAW_DIR),
+        disk: getDiskUsage(BORG_DIR),
         timestamp: Date.now(),
     });
 });
@@ -325,7 +325,7 @@ let messageFeedInterval: ReturnType<typeof setInterval> | null = null;
 
 function startMessageFeed(): void {
     if (messageFeedInterval) return;
-    const historyFile = path.join(TINYCLAW_DIR, "message-history.jsonl");
+    const historyFile = path.join(BORG_DIR, "message-history.jsonl");
     messageFeedInterval = setInterval(() => {
         if (messageFeedClients.size === 0) return;
         for (const client of messageFeedClients) {
@@ -359,7 +359,7 @@ let routingFeedInterval: ReturnType<typeof setInterval> | null = null;
 
 function startRoutingFeed(): void {
     if (routingFeedInterval) return;
-    const routingFile = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
+    const routingFile = path.join(BORG_DIR, "logs/routing.jsonl");
     routingFeedInterval = setInterval(() => {
         if (routingFeedClients.size === 0) return;
         for (const client of routingFeedClients) {
@@ -393,8 +393,8 @@ const logFeedIntervals: Record<string, ReturnType<typeof setInterval>> = {};
 
 function getLogFilePath(type: string): string {
     return type === "telegram"
-        ? path.join(TINYCLAW_DIR, "logs/telegram.log")
-        : path.join(TINYCLAW_DIR, "logs/queue.log");
+        ? path.join(BORG_DIR, "logs/telegram.log")
+        : path.join(BORG_DIR, "logs/queue.log");
 }
 
 function startLogFeed(type: string): void {
@@ -644,7 +644,7 @@ app.get("/api/threads/:id/session-logs", (req, res) => {
     const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
 
     const threads = readJsonSafe<Record<string, { sessionId?: string; cwd?: string }>>(
-        path.join(TINYCLAW_DIR, "threads.json"),
+        path.join(BORG_DIR, "threads.json"),
         {},
     );
 
@@ -669,7 +669,7 @@ app.get("/api/session-logs", (req, res) => {
     const n = Math.min(parseInt(String(req.query.n ?? "20"), 10) || 20, 200);
 
     const threads = readJsonSafe<Record<string, { sessionId?: string; name?: string }>>(
-        path.join(TINYCLAW_DIR, "threads.json"),
+        path.join(BORG_DIR, "threads.json"),
         {},
     );
 
@@ -732,7 +732,7 @@ const server = http.createServer(app);
 
 server.listen(PORT, "0.0.0.0", () => {
     console.log(`Dashboard listening on http://0.0.0.0:${PORT}`);
-    console.log(`Monitoring: ${TINYCLAW_DIR}`);
+    console.log(`Monitoring: ${BORG_DIR}`);
 });
 
 // Graceful shutdown

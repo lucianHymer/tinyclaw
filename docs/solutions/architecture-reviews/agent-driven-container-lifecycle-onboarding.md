@@ -81,7 +81,7 @@ Single Docker list call with label filter replaces N inspect calls:
 
 ```typescript
 const containers = await fetchDockerJson(baseUrl,
-    '/containers/json?all=true&filters={"label":["tinyclaw.type=dev-container"]}');
+    '/containers/json?all=true&filters={"label":["borg.type=dev-container"]}');
 const occupied = new Set<number>();
 for (const c of containers) {
     for (const p of c.Ports || []) {
@@ -92,7 +92,7 @@ for (const c of containers) {
 
 ### 4. Label-Verified Destructive Operations
 
-Delete inspects the container and verifies `tinyclaw.type=dev-container` label before allowing removal. Prevents accidental deletion of unrelated containers even if name resolution has a bug.
+Delete inspects the container and verifies `borg.type=dev-container` label before allowing removal. Prevents accidental deletion of unrelated containers even if name resolution has a bug.
 
 ### 5. Two-Phase Error Handling
 
@@ -155,7 +155,7 @@ Both paths append to `authorized_keys` (using `>>`), so CLI and MCP provisioning
 | Risk | Monitoring | Mitigation |
 |------|-----------|------------|
 | Port exhaustion (99 ports) | `get_container_stats` shows ports | Error on full range; expand 2201-2299 if needed |
-| Image not built | Docker API error caught | Agent sees "tinyclaw-dev image not built" |
+| Image not built | Docker API error caught | Agent sees "borg-dev image not built" |
 | Network missing | Docker API error caught | Network created by `docker compose up` |
 | Memory overallocation | `get_host_memory` shows capacity | Allocation check before create (host total - 2GB OS reserve) |
 | Concurrent creation race | Single master thread serializes | Add idempotency if multi-threaded later |

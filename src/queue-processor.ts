@@ -30,7 +30,7 @@ import {
   buildEnrichedPrompt,
   buildHistoryContext,
 } from "./message-history.js";
-import { createTinyClawMcpServer } from "./mcp-tools.js";
+import { createBorgMcpServer } from "./mcp-tools.js";
 import type { MessageSource, MessageHistoryEntry } from "./message-history.js";
 import {
   loadThreads,
@@ -74,19 +74,19 @@ const CommandMessageSchema = z.object({
 // ─── Paths ───
 
 const SCRIPT_DIR = path.resolve(__dirname, "..");
-const TINYCLAW_DIR = path.join(SCRIPT_DIR, ".tinyclaw");
-const QUEUE_INCOMING = path.join(TINYCLAW_DIR, "queue/incoming");
-const QUEUE_OUTGOING = path.join(TINYCLAW_DIR, "queue/outgoing");
-const QUEUE_PROCESSING = path.join(TINYCLAW_DIR, "queue/processing");
-const QUEUE_DEAD_LETTER = path.join(TINYCLAW_DIR, "queue/dead-letter");
-const QUEUE_COMMANDS = path.join(TINYCLAW_DIR, "queue/commands");
-const QUEUE_STATUS = path.join(TINYCLAW_DIR, "status");
-const LOG_FILE = path.join(TINYCLAW_DIR, "logs/queue.log");
-const ROUTING_LOG = path.join(TINYCLAW_DIR, "logs/routing.jsonl");
-const PROMPTS_LOG = path.join(TINYCLAW_DIR, "logs/prompts.jsonl");
-const PROMPTS_LOG_BACKUP = path.join(TINYCLAW_DIR, "logs/prompts.1.jsonl");
+const BORG_DIR = path.join(SCRIPT_DIR, ".borg");
+const QUEUE_INCOMING = path.join(BORG_DIR, "queue/incoming");
+const QUEUE_OUTGOING = path.join(BORG_DIR, "queue/outgoing");
+const QUEUE_PROCESSING = path.join(BORG_DIR, "queue/processing");
+const QUEUE_DEAD_LETTER = path.join(BORG_DIR, "queue/dead-letter");
+const QUEUE_COMMANDS = path.join(BORG_DIR, "queue/commands");
+const QUEUE_STATUS = path.join(BORG_DIR, "status");
+const LOG_FILE = path.join(BORG_DIR, "logs/queue.log");
+const ROUTING_LOG = path.join(BORG_DIR, "logs/routing.jsonl");
+const PROMPTS_LOG = path.join(BORG_DIR, "logs/prompts.jsonl");
+const PROMPTS_LOG_BACKUP = path.join(BORG_DIR, "logs/prompts.1.jsonl");
 const MAX_PROMPTS_LOG_SIZE = 10 * 1024 * 1024; // 10MB
-const SESSIONS_DIR = path.join(TINYCLAW_DIR, "sessions");
+const SESSIONS_DIR = path.join(BORG_DIR, "sessions");
 
 // ─── Ensure queue directories exist ───
 
@@ -383,7 +383,7 @@ function buildQueryOptions(
       append: buildThreadPrompt(threadConfig),
     },
     mcpServers: {
-      tinyclaw: createTinyClawMcpServer(threadId),
+      borg: createBorgMcpServer(threadId),
     },
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
@@ -495,7 +495,7 @@ async function processHeartbeat(msg: IncomingMessage): Promise<string> {
         append: buildThreadPrompt(threadConfig),
       },
       mcpServers: {
-        tinyclaw: createTinyClawMcpServer(msg.threadId),
+        borg: createBorgMcpServer(msg.threadId),
       },
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,

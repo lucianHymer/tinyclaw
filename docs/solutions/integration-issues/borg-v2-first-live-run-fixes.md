@@ -1,5 +1,5 @@
 ---
-title: "TinyClaw v2 First Live Run — Six Issues Found and Fixed"
+title: "Borg v2 First Live Run — Six Issues Found and Fixed"
 category: integration-issues
 problem_type: first-deployment
 components:
@@ -30,16 +30,16 @@ tags:
   - history-injection
 ---
 
-# TinyClaw v2 First Live Run — Six Issues Found and Fixed
+# Borg v2 First Live Run — Six Issues Found and Fixed
 
-The first live deployment of TinyClaw v2 surfaced six issues across Telegram configuration, agent identity, routing, and session management. All were resolved in a single session.
+The first live deployment of Borg v2 surfaced six issues across Telegram configuration, agent identity, routing, and session management. All were resolved in a single session.
 
 ---
 
 ## Issue 1: Telegram Bot Not Receiving Messages
 
 ### Problem
-Bot started successfully and logged "TinyClaw Telegram bot started," but no messages appeared in logs. Complete silence — no errors, no warnings.
+Bot started successfully and logged "Borg Telegram bot started," but no messages appeared in logs. Complete silence — no errors, no warnings.
 
 ### Root Cause
 Telegram bots in groups have **privacy mode** enabled by default. With privacy mode on, bots only see:
@@ -72,14 +72,14 @@ When messaged, the agent responded: *"I'm Claude Code (the AI assistant for soft
 ### Root Cause
 The system prompt in `buildThreadPrompt()` was purely operational:
 ```
-You are TinyClaw Master, the coordination thread. You have visibility across all projects.
+You are Borg Master, the coordination thread. You have visibility across all projects.
 ```
 No mention of Telegram, no conversational framing. The agent defaulted to Claude Code's base identity.
 
 ### Fix
 Rewrote system prompt to establish identity upfront:
 ```
-You are TinyClaw, an AI assistant that users communicate with through Telegram.
+You are Borg, an AI assistant that users communicate with through Telegram.
 You are a full Claude Code agent with file access, code editing, terminal commands,
 and web search. Users send you messages in a Telegram forum topic and you respond
 there. Treat every incoming message as a direct conversation with the user — be
@@ -218,7 +218,7 @@ if (isNew) {
 }
 ```
 
-Resumed and cached sessions get just timestamp + sender prefix + message. The system prompt still tells the agent where to find history (`tail .tinyclaw/message-history.jsonl`) if it needs it after compaction.
+Resumed and cached sessions get just timestamp + sender prefix + message. The system prompt still tells the agent where to find history (`tail .borg/message-history.jsonl`) if it needs it after compaction.
 
 Also fixed a stale comment in `message-history.ts` that said "for UserPromptSubmit hook injection" — the actual implementation is inline in the queue processor, not hook-based.
 
@@ -230,7 +230,7 @@ Also fixed a stale comment in `message-history.ts` that said "for UserPromptSubm
 
 ## First Live Run Deployment Checklist
 
-Based on these findings, use this checklist for future TinyClaw deployments:
+Based on these findings, use this checklist for future Borg deployments:
 
 ### Telegram Bot Setup
 - [ ] Bot privacy mode is **OFF** (@BotFather > Bot Settings > Group Privacy)
@@ -261,7 +261,7 @@ Based on these findings, use this checklist for future TinyClaw deployments:
 
 ## Cross-References
 
-- **Evolution doc:** `docs/solutions/integration-issues/tinyclaw-v2-evolution-from-fork-to-forum-agent.md`
+- **Evolution doc:** `docs/solutions/integration-issues/borg-v2-evolution-from-fork-to-forum-agent.md`
 - **Architecture plan:** `docs/plans/2026-02-10-feat-agent-sdk-v2-smart-routing-upgrade-plan.md`
 - **ClawRouter (routing source):** [github.com/BlockRunAI/ClawRouter](https://github.com/BlockRunAI/ClawRouter)
 - **Telegram Bot API reactions:** [core.telegram.org/bots/api#setmessagereaction](https://core.telegram.org/bots/api#setmessagereaction)

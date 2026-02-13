@@ -1,5 +1,5 @@
 ---
-title: "TinyClaw v2: Evolution from Fork to Telegram Forum Agent"
+title: "Borg v2: Evolution from Fork to Telegram Forum Agent"
 category: integration-issues
 problem_type: architecture_evolution
 components:
@@ -31,11 +31,11 @@ tags:
   - clawrouter
 ---
 
-# TinyClaw v2: Evolution from Fork to Telegram Forum Agent
+# Borg v2: Evolution from Fork to Telegram Forum Agent
 
 ## Context
 
-TinyClaw started as a minimal multi-channel AI assistant (WhatsApp + Discord) that wrapped the Claude CLI via `execSync`. Over the course of ~33 hours, it was completely rewritten into a Telegram forum-based multi-session agent using the Anthropic Agent SDK v2, smart model routing adapted from [ClawRouter](https://github.com/BlockRunAI/ClawRouter), and cross-thread orchestration inspired by [OpenClaw](https://openclaw.ai/).
+Borg started as a minimal multi-channel AI assistant (WhatsApp + Discord) that wrapped the Claude CLI via `execSync`. Over the course of ~33 hours, it was completely rewritten into a Telegram forum-based multi-session agent using the Anthropic Agent SDK v2, smart model routing adapted from [ClawRouter](https://github.com/BlockRunAI/ClawRouter), and cross-thread orchestration inspired by [OpenClaw](https://openclaw.ai/).
 
 This document captures the full evolution, architectural decisions, lessons learned, and key patterns established during the transformation.
 
@@ -43,14 +43,14 @@ This document captures the full evolution, architectural decisions, lessons lear
 
 ## Lineage and Inspiration
 
-### TinyClaw (Original)
-Created by **Jian** (`jian@pointerhq.com`) as "TinyClaw Simple" -- a fresh-start simplification of a prior, more complex TinyClaw concept. The original vision: a lightweight wrapper around Claude Code's CLI that relays messages from chat platforms through a file-based queue.
+### Borg (Original)
+Created by **Jian** (`jian@pointerhq.com`) as "Borg Simple" -- a fresh-start simplification of a prior, more complex Borg concept. The original vision: a lightweight wrapper around Claude Code's CLI that relays messages from chat platforms through a file-based queue.
 
 ### OpenClaw
-[OpenClaw](https://openclaw.ai/) by Peter Steinberger is an open-source autonomous AI agent with 164,000+ GitHub stars. It connects to multiple messaging platforms and runs as a self-hosted personal AI assistant. TinyClaw draws inspiration from OpenClaw's multi-channel architecture, heartbeat loop pattern, and the general concept of an always-on AI agent. The workspace structure (`~/.openclaw/workspace/`) follows OpenClaw conventions.
+[OpenClaw](https://openclaw.ai/) by Peter Steinberger is an open-source autonomous AI agent with 164,000+ GitHub stars. It connects to multiple messaging platforms and runs as a self-hosted personal AI assistant. Borg draws inspiration from OpenClaw's multi-channel architecture, heartbeat loop pattern, and the general concept of an always-on AI agent. The workspace structure (`~/.openclaw/workspace/`) follows OpenClaw conventions.
 
 ### ClawRouter
-[ClawRouter](https://github.com/BlockRunAI/ClawRouter) by BlockRunAI is a smart routing system that directs LLM API requests to the most cost-effective model. TinyClaw's 14-dimension weighted scoring router was adapted directly from ClawRouter's open-source codebase (MIT licensed). The router files were copied from a local `anthropic-router` workspace (~400 lines of pure TypeScript, zero external dependencies).
+[ClawRouter](https://github.com/BlockRunAI/ClawRouter) by BlockRunAI is a smart routing system that directs LLM API requests to the most cost-effective model. Borg's 14-dimension weighted scoring router was adapted directly from ClawRouter's open-source codebase (MIT licensed). The router files were copied from a local `anthropic-router` workspace (~400 lines of pure TypeScript, zero external dependencies).
 
 ---
 
@@ -66,7 +66,7 @@ WhatsApp (Puppeteer) --> file queue --> execSync("claude -c -p $msg") --> file q
 
 **What was established:**
 - File-based queue system (`incoming/` -> `processing/` -> `outgoing/`) -- the one pattern that survived every rewrite
-- tmux-based orchestration via `tinyclaw.sh`
+- tmux-based orchestration via `borg.sh`
 - Heartbeat cron for periodic check-ins
 - Claude Code hooks for context injection and activity logging
 
@@ -78,7 +78,7 @@ WhatsApp (Puppeteer) --> file queue --> execSync("claude -c -p $msg") --> file q
 - JavaScript -> TypeScript migration
 - Discord integration added via `discord.js`
 - Setup wizard for interactive configuration
-- Model selection via `.tinyclaw/model` config file
+- Model selection via `.borg/model` config file
 - `--dangerously-skip-permissions` flag added to CLI calls
 
 **Problems accumulating:**
@@ -90,7 +90,7 @@ WhatsApp (Puppeteer) --> file queue --> execSync("claude -c -p $msg") --> file q
 ### Phase 3: "The Pinchening" -- Complete Rewrite (Feb 10, 2026 afternoon)
 **Author**: Clawcian (co-authored with Claude Opus 4.6) | **Duration**: ~3 hours | **Single commit: +2,661 / -3,409 lines**
 
-This was the watershed moment. A 1,075-line plan document titled **"TinyClaw 2: The Pinchening"** guided the rewrite.
+This was the watershed moment. A 1,075-line plan document titled **"Borg 2: The Pinchening"** guided the rewrite.
 
 **Removed entirely:**
 - WhatsApp client + Puppeteer
@@ -167,7 +167,7 @@ Each active thread gets periodic heartbeat check-ins. Agents read and write `HEA
 ## Lessons Learned
 
 ### Shell Injection is Insidious
-The original `execSync` approach had message content interpolated directly into shell commands. Even after the SDK rewrite eliminated `execSync`, shell injection lurked in heredocs within `tinyclaw.sh` and `heartbeat-cron.sh`. **Lesson**: Audit all shell scripts, not just application code.
+The original `execSync` approach had message content interpolated directly into shell commands. Even after the SDK rewrite eliminated `execSync`, shell injection lurked in heredocs within `borg.sh` and `heartbeat-cron.sh`. **Lesson**: Audit all shell scripts, not just application code.
 
 ### "Implemented but Not Wired" is a Common Bug Pattern
 `buildHistoryContext()` was fully implemented but never called in the message processing flow. Caught within 1 minute of deployment. **Lesson**: After implementing a function, grep for its callsite. If it has zero callers, it's dead code.
